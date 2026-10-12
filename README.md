@@ -29,7 +29,7 @@ which is gitignored because OptionMetrics data cannot be redistributed.
 | `src/spxvol/density.py` | Breeden-Litzenberger density from SVI, lognormal benchmark, moments and tail probabilities |
 | `src/spxvol/data.py` | one-day SPX pull from WRDS OptionMetrics with parquet cache |
 | `scripts/yf_density.py` | fallback: same pipeline on today's Yahoo Finance chain |
-| `tests/` | put-call parity, IV round trip, SVI recovery and derivatives, density mass and mean |
+| `tests/` | put-call parity, IV round trip and bounds, vega |
 | `figures/` | generated plots |
 
 ## Preview result (Yahoo Finance, one expiry)
