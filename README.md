@@ -39,10 +39,12 @@ Keep the venv outside cloud-synced folders.
 ## Step 1: quotes, forwards, implied vols
 
 Raw quotes need cleaning, and the forward has to be known before any implied volatility is
-meaningful. Filters: bid > 0, ask > bid, spread at most 50% of mid, 7 to 730 days to expiry. SPX
-monthlies settle on the Friday open and SPXW weeklies on the close; where both exist for one date
-the PM contract is kept, and AM-settled T is shortened by 6.5 hours. Only out-of-the-money quotes
-are used, since in-the-money ones carry almost no volatility information.
+meaningful. I keep quotes with bid > 0, ask > bid, a spread at most 50% of mid, and 7 to 730 days to
+expiry. SPX monthlies settle on the Friday open and SPXW weeklies on the close; where both exist for
+one date I keep the PM contract, and I shorten T by 6.5 hours for AM-settled expiries. I use
+out-of-the-money quotes only. An in-the-money option's time value is a tiny fraction of its price,
+and a deep in-the-money call at 8% vol turned out to have time value below float precision, so its
+implied vol is numerically meaningless.
 
 A call and a put at the same strike obey put-call parity, C - P = D (F - K), with D the discount
 factor from the zero curve. That gives the forward F per expiry from strikes within 10% of spot
@@ -51,11 +53,12 @@ without any model. Implied vols come from Black-76 on the forward, inverted with
 ![forwards](figures/step1_forwards.png)
 
 - A joint regression of C - P on K recovers the same forward to 0.01% but its discount factor is
-  noise below three months, which is why D is taken from the zero curve.
+  noise below three months, so I take D from the zero curve and use parity for F only.
 - On 16 March the parity forward is 2.5% below spot at 1.75 years, i.e. the market still priced
   about 2% dividends, while OptionMetrics' dividend yield reads 0.4%. Their implied vols differ from
-  ours by 0.7 vol points with opposite signs on puts and calls, the signature of a forward mismatch.
-  Given their forward, our solver reproduces their vols to 0.03 vol points.
+  ours by 0.7 vol points with opposite signs on puts and calls, which is what a wrong forward looks
+  like: it pushes puts and calls in opposite directions. Given their forward, my solver reproduces
+  their vols to 0.03 vol points, so the solver is exact and the forward is the whole disagreement.
 
 ## Step 2: SVI surface
 
@@ -72,16 +75,19 @@ a sets the level, b the wing slopes, rho the asymmetry (negative for equity skew
 smile, sigma rounds the kink. Wings are linear in k, consistent with Lee's moment bounds.
 
 **Fit.** Bounded least squares in w on strikes from 55% to 135% of the forward, the range that
-holds the density mass and the Step 4 payoffs. Each quote is weighted by 1/var(w) implied by its
+holds the density mass and the Step 4 payoffs. I weight each quote by 1/var(w) implied by its
 bid-ask (half-spread divided by vega, times dw/dsigma), so tight near-the-money quotes dominate.
-Nine starting points over (rho, m) guard against local minima. Constraints:
+Unweighted fits in w do the opposite: the wings have the largest w and pull the fit away from the
+smile minimum. Nine starting points over (rho, m) guard against local minima.
 
-- a >= 0 and m inside the quoted k range. Without these the optimiser fits a steep skew with the
-  far branch of the hyperbola (rho near +1, m far right), which extrapolates nonsensically.
-- sigma >= 0.25 sigma_ATM sqrt(T). SVI is convex in w and the stress-day put wing is concave, so the
-  unconstrained answer is a straight line with a zero-width kink at the edge of the range, which is
-  a point mass in the density. The floor rounds it at a cost of 0.3 vol points on the stress day and
-  nothing on the calm day.
+Two constraints, both learned the hard way. First, a >= 0 and m inside the quoted k range. My first
+fit on live data came back with rho = +0.93 and m = 0.69: the optimiser had matched a steep put skew
+using the far branch of the hyperbola, which fits the quotes and then extrapolates to a density with
+mass 1.04 and positive skew. Second, sigma >= 0.25 sigma_ATM sqrt(T). SVI is convex in w and the
+stress-day put wing is concave, so without a floor the optimiser answers with a straight line and a
+zero-width kink at the edge of the range, which is a point mass in the density at 1.3 times the
+forward. The floor rounds the kink at a cost of 0.3 vol points on the stress day and nothing on the
+calm day, because the floor scales with the smile width.
 
 **Checks.** Butterfly arbitrage (a negative probability somewhere): Gatheral's g(k) >= 0 on every
 slice, since g is proportional to the density in k. Calendar arbitrage (a longer option cheaper
@@ -92,8 +98,9 @@ slices after a running maximum in T removes the violations.
 ![smiles](figures/step2_smiles_2020-03-16.png)
 ![surface](figures/step2_surface.png)
 
-- Mean fit error 0.8 vol points on the calm day, 2.2 on the stress day, all of it the concavity
-  SVI cannot bend to.
+- Mean fit error 0.8 vol points on the calm day, 2.2 on the stress day. The residual pattern is the
+  same on every stress slice: the fit sits above the market in both wings and below it near the money.
+  SVI is convex in total variance and that smile is not.
 - No butterfly violations. Calendar violations are small (worst 0.0014 in total variance on the
   calm day, 0.015 on the stress day) and sit at the edges of the fitted range.
 
@@ -115,11 +122,11 @@ benchmark is the lognormal distribution Black-Scholes assumes, with the same for
 | stress | 1M | 78% | -1.9 | 5.9 | 29% / 36% | 18% / 19% |
 | stress | 3M | 63% | -2.1 | 6.1 | 32% / 43% | 24% / 30% |
 
-- On the calm day the skew is the whole crash premium: the lognormal gives a 20% fall no chance,
-  the market gives it 2.2% over three months.
-- On the stress day the ATM vol alone already prices the crash. The market density is more peaked
-  than the lognormal with a fatter far-left tail, and gives moderate falls a lower probability.
-- Stress-day tails rest on the SVI wings, where the fit is weakest.
+On the calm day the skew is the whole crash premium: the lognormal gives a 20% fall no chance, the
+market gives it 2.2% over three months. On the stress day the ATM vol alone already prices the crash,
+and the market density is more peaked than the lognormal with a fatter far-left tail but a lower
+probability of moderate falls. The stress-day tails rest on the SVI wings, where the fit is weakest,
+so I would not quote the 24% to more than one significant figure.
 
 ## Step 4: local vol and Monte Carlo
 
@@ -157,13 +164,13 @@ forward; s.e. at most 0.02 on the stress day and 0.006 on the calm day.
   cheaper than Black-Scholes on the calm day, 4.6% cheaper than the term-structure model on the stress day.
 - The Asian is the term-structure effect. Calm-day vol rises with maturity, so the average fixes
   under lower early vol (7% cheaper); stress-day vol is inverted (20% dearer). Black-Scholes with the
-  right ATM term structure lands within 0.5% of local vol.
+  right ATM term structure comes within 0.5% of the local vol price.
 
 ![convergence](figures/step4_convergence.png)
 
 Per random draw, antithetic pairs cut the standard error of the barrier price by about 1.7x. The
 European control variate cuts it a further 5x on the calm day but only 1.3x on the stress day,
-where most paths knock out and the vanilla payoff is a poor proxy.
+where most paths knock out and the vanilla payoff is a weak control.
 
 ## Layout
 
