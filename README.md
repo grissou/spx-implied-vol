@@ -25,6 +25,16 @@ quoted option, and uses it to price two options whose value depends on the path 
   for pricing options that quotes do not cover.
 - **Monte Carlo** simulates many possible index paths under a model and averages the payoff.
 
+## Main outputs
+
+| File | What it is |
+|---|---|
+| `results/risk_neutral_density.png` | the market-implied distribution of the index, calm vs stress, against the lognormal |
+| `results/density_stats.csv` | its moments and tail probabilities |
+| `results/exotic_prices.csv` | barrier and Asian prices under local vol, Black-Scholes, and Black-Scholes with term structure |
+
+Everything in `figures/` is a diagnostic, named by step.
+
 ## Run
 
 ```
@@ -50,7 +60,7 @@ A call and a put at the same strike obey put-call parity, C - P = D (F - K), wit
 factor from the zero curve. That gives the forward F per expiry from strikes within 10% of spot
 without any model. Implied vols come from Black-76 on the forward, inverted with Brent's method.
 
-![forwards](figures/step1_forwards.png)
+![forwards](figures/1_forwards_vs_zero_curve.png)
 
 - A joint regression of C - P on K recovers the same forward to 0.01% but its discount factor is
   noise below three months, so I take D from the zero curve and use parity for F only.
@@ -60,47 +70,97 @@ without any model. Implied vols come from Black-76 on the forward, inverted with
   like: it pushes puts and calls in opposite directions. Given their forward, my solver reproduces
   their vols to 0.03 vol points, so the solver is exact and the forward is the whole disagreement.
 
+![own IV vs OptionMetrics](figures/1_implied_vol_vs_optionmetrics.png)
+
 ## Step 2: SVI surface
 
 Quotes exist only at listed strikes and expiries. A smooth curve through them is needed to take
 derivatives (Step 3) and to price options at arbitrary levels (Step 4), and it must not admit
-arbitrage, i.e. combinations of options with negative price.
+arbitrage, i.e. combinations of options with negative price. SVI ("stochastic volatility
+inspired", Gatheral 2004) is the standard choice for equity index smiles.
 
-**Model.** Each expiry is a raw SVI slice ("stochastic volatility inspired", Gatheral 2004) in
-total variance w = sigma^2 T against log-moneyness k = ln(K/F):
+### The model
+
+Each expiry gets its own slice. The variable is total variance w = sigma^2 T, the squared implied
+vol times time to expiry, as a function of log-moneyness k = ln(K/F), the strike's log distance
+from the forward:
 
     w(k) = a + b [ rho (k - m) + sqrt((k - m)^2 + sigma^2) ]
 
-a sets the level, b the wing slopes, rho the asymmetry (negative for equity skew), m shifts the
-smile, sigma rounds the kink. Wings are linear in k, consistent with Lee's moment bounds.
+Five parameters, each with a visible effect on the curve:
 
-**Fit.** Bounded least squares in w on strikes from 55% to 135% of the forward, the range that
-holds the density mass and the Step 4 payoffs. I weight each quote by 1/var(w) implied by its
-bid-ask (half-spread divided by vega, times dw/dsigma), so tight near-the-money quotes dominate.
-Unweighted fits in w do the opposite: the wings have the largest w and pull the fit away from the
-smile minimum. Nine starting points over (rho, m) guard against local minima.
+| Parameter | What it does | Constraint |
+|---|---|---|
+| a | overall level: shifts the whole curve up or down | a >= 0 |
+| b | steepness of both wings | b >= 0 |
+| rho | asymmetry: -1 is a one-sided put skew, +1 a call skew, 0 symmetric | -1 < rho < 1 |
+| m | horizontal position of the smile minimum | inside the quoted k range |
+| sigma | width of the rounded kink at the minimum; 0 is a sharp V | >= 0.25 sigma_ATM sqrt(T) |
 
-Two constraints, both learned the hard way. First, a >= 0 and m inside the quoted k range. My first
-fit on live data came back with rho = +0.93 and m = 0.69: the optimiser had matched a steep put skew
-using the far branch of the hyperbola, which fits the quotes and then extrapolates to a density with
-mass 1.04 and positive skew. Second, sigma >= 0.25 sigma_ATM sqrt(T). SVI is convex in w and the
-stress-day put wing is concave, so without a floor the optimiser answers with a straight line and a
-zero-width kink at the edge of the range, which is a point mass in the density at 1.3 times the
-forward. The floor rounds the kink at a cost of 0.3 vol points on the stress day and nothing on the
-calm day, because the floor scales with the smile width.
+Far from the money the curve is a straight line in k with slope b(1 - rho) on the left and
+b(1 + rho) on the right. That is the shape Lee's moment formula requires (total variance can grow
+at most linearly in |k|), so SVI extrapolates sensibly beyond the last quote.
 
-**Checks.** Butterfly arbitrage (a negative probability somewhere): Gatheral's g(k) >= 0 on every
-slice, since g is proportional to the density in k. Calendar arbitrage (a longer option cheaper
-than a shorter one): w must not decrease in T at any k; adjacent slices are compared on the fitted
-range and violations reported. The surface used downstream interpolates w linearly in T between
-slices after a running maximum in T removes the violations.
+### Fitting one slice
 
-![smiles](figures/step2_smiles_2020-03-16.png)
-![surface](figures/step2_surface.png)
+1. Take the out-of-the-money quotes for that expiry with strikes between 55% and 135% of the
+   forward. That range holds essentially all the probability mass and all the Step 4 payoffs.
+2. Convert each implied vol to total variance, w = sigma^2 T.
+3. Give each quote a weight 1/var(w). The uncertainty in w comes from the bid-ask: half the spread
+   in price, divided by vega to get vol units, times 2 sigma T to get variance units. Tight
+   near-the-money quotes get large weights, wide wing quotes small ones. Unweighted least squares in
+   w does the opposite, because w itself is largest in the wings, and it misses the smile minimum.
+4. Minimise the weighted sum of squared errors with bounded least squares, from nine starting
+   points over (rho, m), keeping the best.
+5. Record the fit error in vol points and the minimum of the butterfly function g(k) over the
+   fitted range.
 
-- Mean fit error 0.8 vol points on the calm day, 2.2 on the stress day. The residual pattern is the
-  same on every stress slice: the fit sits above the market in both wings and below it near the money.
-  SVI is convex in total variance and that smile is not.
+Two of the bounds exist because of what went wrong without them. My first fit on live data came
+back with rho = +0.93 and m = 0.69: the optimiser had matched a steep put skew using the far
+branch of the hyperbola, which fits the quotes to 0.2 vol points and then extrapolates to a
+density with mass 1.04 and positive skew. Hence a >= 0 and m inside the quoted range. On the
+stress day every slice then hit sigma = 0 with m at the edge of the range. SVI is convex in w
+(its second derivative is b sigma^2 / r^3 > 0) and the 16 March put wing is concave, so the best
+convex approximation is a straight line with a zero-width kink pushed to the boundary. A zero-width
+kink is a point mass in the density, which showed up as a spike at 1.3 times the forward. The
+floor on sigma scales with the smile width sigma_ATM sqrt(T), so it rounds the kink on the stress
+day (0.3 vol points of extra error) and does nothing on the calm day, where the fitted sigma was
+already above it.
+
+### Arbitrage checks
+
+Butterfly arbitrage means a negative probability somewhere, i.e. a butterfly spread with negative
+price. Gatheral and Jacquier (2014) show a slice is free of it if and only if
+
+    g(k) = (1 - k w'/(2w))^2 - (w'/4) (1/w + 1/4) + w''/2  >=  0
+
+where w' and w'' are the first and second derivatives in k. g is proportional to the density in
+k, so this is the same condition as the density being positive. I evaluate it on a fine k grid
+for every slice. No slice violates it on either day.
+
+Calendar arbitrage means a longer-dated option is cheaper than a shorter one at the same
+moneyness, which is impossible since the longer one can be converted into the shorter. The
+condition is w(k, T2) >= w(k, T1) for T2 > T1 at every k. Per-slice fits do not enforce this,
+so I compare each adjacent pair on the fitted range and report every violation.
+
+### Assembling the surface
+
+The surface used by Dupire in Step 4 lives on a grid in (k, T). Total variance is evaluated from
+each slice on the k grid, a running maximum in T removes the calendar violations, and w is
+interpolated linearly in T between expiries and proportionally to T before the first one. The
+size of the largest running-maximum adjustment is reported so the correction stays visible.
+
+### What the diagnostics show
+
+![smiles](figures/2_svi_smiles.png)
+![surface](figures/2_svi_surface.png)
+![fit quality](figures/2_svi_fit_quality.png)
+
+- Mean fit error 0.8 vol points over 36 expiries on the calm day, 2.2 on the stress day. Near the
+  money on the calm day the error is 0.1 to 0.2 vol points, about the bid-ask.
+- The residual pattern is the same on every stress slice: the fit sits above the market in both
+  wings and below it near the money. SVI is convex in total variance and that smile is not. The
+  error is misspecification, not noise.
 - No butterfly violations. Calendar violations are small (worst 0.0014 in total variance on the
   calm day, 0.015 on the stress day) and sit at the edges of the fitted range.
 
@@ -115,7 +175,7 @@ forward and the ATM vol. The top row is the density; the bottom row is its runni
 reaches 1.000 on every slice, with the probability of a 10% and a 20% fall marked. The mean equals
 the forward on every slice.
 
-![density](figures/step3_density.png)
+![density](results/risk_neutral_density.png)
 
 | day | T | ATM vol | log-return skew | excess kurtosis | P(S < 0.9F) RN / LN | P(S < 0.8F) RN / LN |
 |---|---|---|---|---|---|---|
@@ -142,8 +202,8 @@ stress day is 0.2 to 0.5 vol points, several standard errors.
 Validation comes first: European calls priced by simulation under local vol must reproduce the
 surface they were built from. They do, within 2 standard errors at every strike on both days.
 
-![local vol](figures/step4_localvol.png)
-![validation](figures/step4_validation.png)
+![local vol](figures/4_local_vol_surface.png)
+![validation](figures/4_monte_carlo_validation.png)
 
 Two path-dependent options, three months, struck at the forward. A down-and-out call is a call
 that is cancelled if the index ever closes below a barrier, here 90% of spot. An arithmetic Asian
@@ -168,7 +228,7 @@ forward; s.e. at most 0.02 on the stress day and 0.006 on the calm day.
   under lower early vol (7% cheaper); stress-day vol is inverted (20% dearer). Black-Scholes with the
   right ATM term structure comes within 0.5% of the local vol price.
 
-![convergence](figures/step4_convergence.png)
+![convergence](figures/4_barrier_convergence.png)
 
 Per random draw, antithetic pairs cut the standard error of the barrier price by about 1.7x. The
 European control variate cuts it a further 5x on the calm day but only 1.3x on the stress day,
@@ -186,7 +246,7 @@ where most paths knock out and the vanilla payoff is a weak control.
 | `src/spxvol/density.py` | Breeden-Litzenberger density and moments |
 | `src/spxvol/localvol.py` | Dupire local vol on the surface grid |
 | `src/spxvol/mc.py` | log-Euler simulation, antithetic pairs, control variates, geometric Asian closed form |
-| `scripts/build.py` | rebuilds every figure and table |
+| `scripts/build.py` | rebuilds `results/` and `figures/` |
 
 ## Limitations
 
