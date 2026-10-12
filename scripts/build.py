@@ -6,9 +6,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from spxvol.black import implied_vol_vec
+from spxvol.black import black_price, implied_vol_vec
 from spxvol.clean import clean_quotes, forwards, otm_quotes
 from spxvol.data import load_day
+from spxvol.density import density_stats, lognormal_density, rn_density, strike_grid
+from spxvol.localvol import LocalVol
+from spxvol.mc import estimate, geometric_asian_call, simulate
+from spxvol.surface import K_CORE, PARAMS, Surface, calendar_violations, fit_slices
+from spxvol.svi import svi_w
 
 ROOT = Path(__file__).resolve().parents[1]
 FIG = ROOT / "figures"
@@ -35,7 +40,7 @@ def save(fig, name):
 
 
 def step1():
-
+    """Clean quotes, forwards, own implied vols vs OptionMetrics."""
     res = {}
     for label, date in DATES.items():
         raw = load_day(date)
@@ -73,12 +78,8 @@ def step1():
     return res
 
 
-
-
 def step2(res):
-    from spxvol.surface import K_CORE, Surface, calendar_violations, fit_slices
-    from spxvol.svi import svi_w
-
+    """SVI per expiry, arbitrage checks, surface grid."""
     for label, r in res.items():
         r["slices"] = s = fit_slices(r["otm"])
         r["surface"] = Surface(s)
@@ -95,13 +96,14 @@ def step2(res):
         for ax, (_, row) in zip(axes.ravel(), pick.iterrows()):
             g = otm[otm.exdate == row.exdate]
             kk = np.linspace(g.k.min(), g.k.max(), 300)
-            p = row[["a", "b", "rho", "m", "sigma"]].values.astype(float)
+            p = row[PARAMS].values.astype(float)
             ax.axvspan(*K_CORE, color="#e6e5e1", alpha=0.5, lw=0)
             ax.scatter(g.k, 100 * g.iv, s=6, color=INK, alpha=0.5)
             ax.plot(kk, 100 * np.sqrt(svi_w(kk, p) / row["T"]), color=COLOR[label], lw=2)
             ax.set_title(f"{row.exdate.date()}  T={row['T']:.2f}  RMSE {row.rmse_vp:.2f}", fontsize=10)
             ax.set_xlabel("k = ln(K/F)")
-        axes[0, 0].set_ylabel("implied vol (%)"); axes[1, 0].set_ylabel("implied vol (%)")
+        for ax in axes[:, 0]:
+            ax.set_ylabel("implied vol (%)")
         fig.suptitle(f"{label}: market IV vs SVI (fitted on shaded range)", color=INK, x=0.01, ha="left")
         save(fig, f"step2_smiles_{label.split()[1]}.png")
 
@@ -113,7 +115,8 @@ def step2(res):
         ax.plot_surface(K, T, 100 * np.sqrt(sf.W / sf.T[:, None]), cmap="Blues" if "calm" in label else "Oranges",
                         rstride=1, cstride=4, lw=0, antialiased=True)
         ax.set(xlabel="k", ylabel="T (years)", zlabel="IV (%)", title=label)
-        ax.set_facecolor(SURFACE); ax.view_init(elev=25, azim=-130)
+        ax.set_facecolor(SURFACE)
+        ax.view_init(elev=25, azim=-130)
     save(fig, "step2_surface.png")
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.2))
@@ -125,17 +128,14 @@ def step2(res):
     ax1.set(xlabel="T (years)", ylabel="RMSE (vol points)", title="SVI fit error per expiry")
     ax2.axhline(0, color=MUTED, lw=1)
     ax2.set(xlabel="T (years)", ylabel="min g(k)", title="Butterfly check: min g(k) per expiry")
-    ax1.legend(frameon=False); ax2.legend(frameon=False)
+    ax1.legend(frameon=False)
+    ax2.legend(frameon=False)
     save(fig, "step2_fit_quality.png")
     return res
 
 
 def step3(res, targets=(30, 91)):
     """Risk-neutral density vs lognormal at the expiries nearest 1 and 3 months."""
-    from spxvol.density import density_stats, lognormal_density, rn_density, strike_grid
-    from spxvol.surface import PARAMS
-    from spxvol.svi import svi_w
-
     stats = []
     fig, axes = plt.subplots(1, len(targets), figsize=(12, 4.4), sharey=True)
     style(fig, axes)
@@ -164,12 +164,7 @@ def step3(res, targets=(30, 91)):
 
 def step4(res, target_days=91, barrier=0.9, n_pairs=100_000, steps_per_day=8):
     """Dupire local vol, Monte Carlo validation on vanillas, then a down-and-out call and an arithmetic Asian.
-    Daily barrier monitoring and Asian fixings; finer time steps keep the log-Euler bias below one s.e."""
-    from spxvol.black import black_price, implied_vol_vec
-    from spxvol.localvol import LocalVol
-    from spxvol.mc import estimate, geometric_asian_call, simulate
-    from spxvol.surface import Surface
-
+    Barrier monitoring and Asian fixings are daily; the finer time steps keep the log-Euler bias below one s.e."""
     rows, conv = [], {}
     fig_lv, axes_lv = plt.subplots(1, 2, figsize=(12, 4.2))
     fig_val, axes_val = plt.subplots(1, 2, figsize=(12, 4.2))
@@ -189,11 +184,9 @@ def step4(res, target_days=91, barrier=0.9, n_pairs=100_000, steps_per_day=8):
         models = {"local vol": lv, "BS term structure": lambda k, j: np.full_like(k, sig_ts[j]),
                   "Black-Scholes": lambda k, j: np.full_like(k, atm)}
         sim = {name: simulate(fn, t, F_t, n_pairs, fix_every=steps_per_day) for name, fn in models.items()}
-        lo = lv.sigma_grid <= lv.sig_min
-        print(f"{label}: T={T:.3f} ({row.exdate.date()}), F={F:.1f}, ATM vol {100*atm:.1f}%, {days} days x {steps_per_day} steps x {2*n_pairs} paths; "
-              f"local vol at the {100*lv.sig_min:.0f}% floor on {100*lo.mean():.1f}% of the grid"
-              + (f" (k from {lv.k[lo.any(0)].min():.2f} to {lv.k[lo.any(0)].max():.2f})" if lo.any() else "")
-              + f", at the cap on {100*(lv.sigma_grid >= lv.sig_max).mean():.1f}%")
+        clipped = np.mean((lv.sigma_grid <= lv.sig_min) | (lv.sigma_grid >= lv.sig_max))
+        print(f"{label}: T={T:.3f} ({row.exdate.date()}), F={F:.1f}, ATM vol {100*atm:.1f}%, "
+              f"{days} days x {steps_per_day} steps x {2*n_pairs} paths, local vol clipped on {100*clipped:.1f}% of the grid")
 
         kc = (lv.k >= -0.6) & (lv.k <= 0.3)
         im = ax_lv.pcolormesh(lv.k[kc], lv.t, 100 * lv.sigma_grid[:, kc], cmap="Blues" if "calm" in label else "Oranges", shading="auto")
