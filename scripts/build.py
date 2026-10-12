@@ -135,11 +135,14 @@ def step2(res):
 
 
 def step3(res, targets=(30, 91)):
-    """Risk-neutral density vs lognormal at the expiries nearest 1 and 3 months."""
+    """Risk-neutral density and cumulative probability vs lognormal at the expiries nearest 1 and 3 months."""
+    from scipy.integrate import cumulative_trapezoid
+
     stats = []
-    fig, axes = plt.subplots(1, len(targets), figsize=(12, 4.4), sharey=True)
+    fig, axes = plt.subplots(2, len(targets), figsize=(12, 8), sharex="col")
     style(fig, axes)
-    for ax, days in zip(axes, targets):
+    for col, days in enumerate(targets):
+        ax, axc = axes[:, col]
         for label, r in res.items():
             s = r["slices"]
             row = s.iloc[(s["T"] * 365 - days).abs().argmin()]
@@ -153,9 +156,23 @@ def step3(res, targets=(30, 91)):
                                   **density_stats(K, dens, F)))
             ax.plot(K / F, q * F, color=COLOR[label], lw=2, label=f"{label} ({row.exdate.date()})")
             ax.plot(K / F, ln * F, color=COLOR[label], lw=1.2, ls="--", label=f"lognormal, ATM vol {100 * atm:.0f}%")
-        ax.set(xlim=(0.5, 1.3), xlabel="K / F", title=f"about {days} days to expiry")
+            cdf = cumulative_trapezoid(q, K, initial=0)
+            axc.plot(K / F, cdf, color=COLOR[label], lw=2)
+            axc.plot(K / F, cumulative_trapezoid(ln, K, initial=0), color=COLOR[label], lw=1.2, ls="--")
+            for x in (0.8, 0.9):
+                pr = np.interp(x, K / F, cdf)
+                axc.plot([x], [pr], "o", color=COLOR[label], ms=5)
+                axc.annotate(f"{100 * pr:.1f}%", (x, pr), xytext=(-6, 6), textcoords="offset points", ha="right",
+                             fontsize=8, color=COLOR[label])
+            axc.set_title(f"cumulative probability, total {cdf[-1]:.3f}", fontsize=10, loc="left")
+        ax.set(xlim=(0.5, 1.3), title=f"about {days} days to expiry")
         ax.legend(frameon=False, fontsize=8)
-    axes[0].set_ylabel("density of S_T / F")
+        for x in (0.8, 0.9):
+            axc.axvline(x, color=MUTED, lw=0.8, ls=":")
+        axc.axhline(1, color=MUTED, lw=0.8)
+        axc.set(xlabel="index at expiry / forward", ylim=(0, 1.05))
+    axes[0, 0].set_ylabel("probability density")
+    axes[1, 0].set_ylabel("P(index below this level)")
     save(fig, "step3_density.png")
     st = pd.DataFrame(stats)
     print(st.round(3).to_string(index=False))

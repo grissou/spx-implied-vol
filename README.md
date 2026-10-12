@@ -110,8 +110,10 @@ Breeden and Litzenberger (1978): the second derivative of the call price with re
 the discounted probability density of the index at expiry. Intuitively, a tight spread of calls
 pays off only if the index lands in a narrow band, so its price is the probability of that band.
 From the slice's call prices C(K) on a strike grid from 0.05F to 4F, q(K) = (1/D) d2C/dK2 by
-central differences. Mass integrates to 1.000 and the mean equals the forward on every slice. The
-benchmark is the lognormal distribution Black-Scholes assumes, with the same forward and the ATM vol.
+central differences. The benchmark is the lognormal distribution Black-Scholes assumes, with the same
+forward and the ATM vol. The top row is the density; the bottom row is its running total, which
+reaches 1.000 on every slice, with the probability of a 10% and a 20% fall marked. The mean equals
+the forward on every slice.
 
 ![density](figures/step3_density.png)
 
