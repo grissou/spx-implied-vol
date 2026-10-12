@@ -9,8 +9,6 @@ proportional to the risk-neutral density in k.
 import numpy as np
 from scipy.optimize import least_squares
 
-LB = [-np.inf, 0.0, -0.999, -2.0, 1e-4]
-UB = [np.inf, np.inf, 0.999, 2.0, 5.0]
 
 
 def svi_w(k, p):
@@ -34,9 +32,16 @@ def svi_g(k, p):
 
 
 def fit_svi(k, w, weights=None):
-    """Least-squares fit of raw SVI to market total variances. Returns (a, b, rho, m, sigma)."""
+    """Least-squares fit of raw SVI to market total variances. Returns (a, b, rho, m, sigma).
+
+    Well-posedness constraints: a >= 0, and the smile minimum m must lie inside the
+    quoted k range. Without them the optimiser can fit a steep skew with the far
+    branch of the hyperbola (rho ~ +1, m far right), which extrapolates nonsensically.
+    """
     k, w = np.asarray(k, float), np.asarray(w, float)
     sw = np.ones_like(k) if weights is None else np.sqrt(np.asarray(weights, float))
+    lb = [0.0, 0.0, -0.999, k.min(), 1e-4]
+    ub = [np.inf, np.inf, 0.999, k.max(), 2.0]
 
     def resid(p):
         return sw * (svi_w(k, p) - w)
@@ -45,7 +50,7 @@ def fit_svi(k, w, weights=None):
     for rho0 in (-0.7, -0.3, 0.0):
         for m0 in (-0.1, 0.0, 0.1):
             x0 = [0.5 * w.min(), 0.1, rho0, m0, 0.1]
-            res = least_squares(resid, x0, bounds=(LB, UB))
+            res = least_squares(resid, x0, bounds=(lb, ub))
             if best is None or res.cost < best.cost:
                 best = res
     return best.x
