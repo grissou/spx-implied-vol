@@ -47,15 +47,14 @@ class Surface:
         self.adjusted = float(np.abs(self.W - W).max())
 
     def w(self, k, T):
-        k, T = np.broadcast_arrays(np.asarray(k, float), np.asarray(T, float))
-        out = np.empty_like(k)
-        for idx, (kk, tt) in enumerate(zip(k.ravel(), T.ravel())):
-            col = np.array([np.interp(kk, self.k, row) for row in self.W])
-            if tt <= self.T[0]:
-                out.flat[idx] = col[0] * tt / self.T[0]
-            else:
-                out.flat[idx] = np.interp(tt, self.T, col)
-        return out
+        """Vector k, scalar T."""
+        if T <= self.T[0]:
+            row = self.W[0] * T / self.T[0]
+        else:
+            i = min(np.searchsorted(self.T, T, side="right") - 1, len(self.T) - 2)
+            a = (T - self.T[i]) / (self.T[i + 1] - self.T[i])
+            row = (1 - a) * self.W[i] + a * self.W[i + 1]
+        return np.interp(k, self.k, row)
 
     def iv(self, k, T):
         return np.sqrt(self.w(k, T) / T)

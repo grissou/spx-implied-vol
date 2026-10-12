@@ -162,5 +162,99 @@ def step3(res, targets=(30, 91)):
     return st
 
 
+def step4(res, target_days=91, barrier=0.9, n_pairs=100_000, steps_per_day=8):
+    """Dupire local vol, Monte Carlo validation on vanillas, then a down-and-out call and an arithmetic Asian.
+    Daily barrier monitoring and Asian fixings; finer time steps keep the log-Euler bias below one s.e."""
+    from spxvol.black import black_price, implied_vol_vec
+    from spxvol.localvol import LocalVol
+    from spxvol.mc import estimate, geometric_asian_call, simulate
+    from spxvol.surface import Surface
+
+    rows, conv = [], {}
+    fig_lv, axes_lv = plt.subplots(1, 2, figsize=(12, 4.2))
+    fig_val, axes_val = plt.subplots(1, 2, figsize=(12, 4.2))
+    style(fig_lv, axes_lv)
+    style(fig_val, axes_val)
+    for (label, r), ax_lv, ax_val in zip(res.items(), axes_lv, axes_val):
+        s, sf, S0 = r["slices"], r["surface"], r["spot"]
+        row = s.iloc[(s["T"] * 365 - target_days).abs().argmin()]
+        T, F, D = row["T"], row.F, row.D
+        days = int(round(T * 365))
+        n = days * steps_per_day
+        t = np.linspace(0, T, n + 1)
+        F_t = np.exp(np.interp(t, np.r_[0, s["T"]], np.r_[np.log(S0), np.log(s.F)]))
+        lv = LocalVol(Surface(s, k=np.linspace(-1.5, 1.0, 501)), t[:-1] + T / n / 2)
+        atm = sf.iv(0.0, T)
+        sig_ts = np.sqrt(np.diff([sf.w(0.0, ti) for ti in t]) / np.diff(t))  # ATM term structure, no skew
+        models = {"local vol": lv, "BS term structure": lambda k, j: np.full_like(k, sig_ts[j]),
+                  "Black-Scholes": lambda k, j: np.full_like(k, atm)}
+        sim = {name: simulate(fn, t, F_t, n_pairs, fix_every=steps_per_day) for name, fn in models.items()}
+        lo = lv.sigma_grid <= lv.sig_min
+        print(f"{label}: T={T:.3f} ({row.exdate.date()}), F={F:.1f}, ATM vol {100*atm:.1f}%, {days} days x {steps_per_day} steps x {2*n_pairs} paths; "
+              f"local vol at the {100*lv.sig_min:.0f}% floor on {100*lo.mean():.1f}% of the grid"
+              + (f" (k from {lv.k[lo.any(0)].min():.2f} to {lv.k[lo.any(0)].max():.2f})" if lo.any() else "")
+              + f", at the cap on {100*(lv.sigma_grid >= lv.sig_max).mean():.1f}%")
+
+        kc = (lv.k >= -0.6) & (lv.k <= 0.3)
+        im = ax_lv.pcolormesh(lv.k[kc], lv.t, 100 * lv.sigma_grid[:, kc], cmap="Blues" if "calm" in label else "Oranges", shading="auto")
+        fig_lv.colorbar(im, ax=ax_lv, label="local vol (%)")
+        ax_lv.set(xlabel="k = ln(S / F_t)", ylabel="t (years)", title=f"{label}: Dupire local vol")
+
+        ks = np.array([-0.3, -0.2, -0.1, 0.0, 0.1, 0.2])
+        K = F * np.exp(ks)
+        mc = [estimate(D * np.maximum(sim["local vol"]["S_T"] - Ki, 0)) for Ki in K]
+        px, se = np.array([m[0] for m in mc]), np.array([m[1] for m in mc])
+        iv_mc, iv_lo, iv_hi = (implied_vol_vec(px + c * se, F, K, T, D, True) for c in (0, -2, 2))
+        iv_svi = sf.iv(ks, T)
+        ax_val.plot(ks, 100 * iv_svi, color=INK, lw=2, label="SVI surface")
+        ax_val.errorbar(ks, 100 * iv_mc, yerr=100 * np.vstack([iv_mc - iv_lo, iv_hi - iv_mc]), fmt="o", color=COLOR[label],
+                        ms=5, capsize=3, label="MC under local vol (2 s.e.)")
+        ax_val.set(xlabel="k", ylabel="implied vol (%)", title=f"{label}: European calls, T={T:.2f}")
+        ax_val.legend(frameon=False)
+        print("  validation |MC - SVI| in s.e.:", np.round(np.abs(px - black_price(F, K, T, iv_svi, D)) / se, 1))
+
+        B = barrier * S0
+        eu_ref = black_price(F, F, T, atm, D)  # all three models price the ATM European identically
+        for model, o in sim.items():
+            eu = D * np.maximum(o["S_T"] - F, 0)
+            dob = eu * (o["S_min"] > B)
+            asian = D * np.maximum(o["A"] - F, 0)
+            out = {"European": estimate(eu), "down-and-out call": estimate(dob, eu, eu_ref)}
+            if model == "Black-Scholes":
+                geo = D * np.maximum(o["G"] - F, 0)
+                out["arithmetic Asian"] = estimate(asian, geo, geometric_asian_call(F_t[::steps_per_day], t[::steps_per_day], atm, F, D))
+            else:
+                out["arithmetic Asian"] = estimate(asian, eu, eu_ref)
+            for name, (p, e) in out.items():
+                rows.append(dict(day=label, model=model, option=name, price_pct_F=100 * p / F, se_pct_F=100 * e / F))
+            if model == "local vol":
+                conv[label] = dict(y=dob, x=eu, ref=eu_ref)
+    save(fig_lv, "step4_localvol.png")
+    save(fig_val, "step4_validation.png")
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
+    style(fig, axes)
+    for ax, (label, c) in zip(axes, conv.items()):
+        m = np.unique(np.logspace(2, np.log10(n_pairs), 40).astype(int))
+        pair = lambda v, mi: np.concatenate([v[:mi], v[n_pairs:n_pairs + mi]])
+        runs = {"crude": [estimate(c["y"][:mi], antithetic=False) for mi in m],
+                "antithetic": [estimate(pair(c["y"], mi)) for mi in m],
+                "antithetic + control": [estimate(pair(c["y"], mi), pair(c["x"], mi), c["ref"]) for mi in m]}
+        for (name, est), col in zip(runs.items(), (MUTED, INK, COLOR[label])):
+            est = np.array(est)
+            ax.fill_between(m, est[:, 0] - 2 * est[:, 1], est[:, 0] + 2 * est[:, 1], alpha=0.15, lw=0, color=col)
+            ax.plot(m, est[:, 0], lw=1.5, color=col, label=f"{name} (s.e. {est[-1, 1]:.3f})")
+        ax.set(xscale="log", xlabel="paths (pairs for antithetic)", ylabel="price", title=f"{label}: down-and-out call, local vol")
+        ax.legend(frameon=False, fontsize=8)
+    save(fig, "step4_convergence.png")
+
+    tab = pd.DataFrame(rows).pivot(index=["day", "option"], columns="model", values=["price_pct_F", "se_pct_F"])
+    print(tab.round(3).to_string())
+    return tab
+
+
 if __name__ == "__main__":
-    step3(step2(step1()))
+    r = step1()
+    step2(r)
+    step3(r)
+    step4(r)
