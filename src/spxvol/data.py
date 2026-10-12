@@ -14,7 +14,7 @@ DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 OPTION_COLS = [
     "date", "exdate", "cp_flag", "strike_price", "best_bid", "best_offer",
     "volume", "open_interest", "impl_volatility", "delta", "am_settlement",
-    "exercise_style", "ss_flag", "symbol",
+    "expiry_indicator", "forward_price", "ss_flag", "symbol",
 ]
 
 
