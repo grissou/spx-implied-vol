@@ -6,15 +6,14 @@ local vol model with Monte Carlo pricing of path-dependent options, on a calm da
 and a stress day.
 
 **Status:** Black-76 pricer, implied vol solver, SVI slice fit and risk-neutral
-density are done and tested. WRDS pull, surface across expiries, Dupire local vol
+density are done. WRDS pull, surface across expiries, Dupire local vol
 and Monte Carlo are next.
 
 ## Setup
 
 ```
 python -m venv .venv
-.venv/bin/pip install -e ".[dev,yf]"
-.venv/bin/pytest
+.venv/bin/pip install -e ".[yf]"
 ```
 
 WRDS credentials live in `~/.pgpass`, never in code. Raw data is cached in `data/`,
@@ -29,7 +28,6 @@ which is gitignored because OptionMetrics data cannot be redistributed.
 | `src/spxvol/density.py` | Breeden-Litzenberger density from SVI, lognormal benchmark, moments and tail probabilities |
 | `src/spxvol/data.py` | one-day SPX pull from WRDS OptionMetrics with parquet cache |
 | `scripts/yf_density.py` | fallback: same pipeline on today's Yahoo Finance chain |
-| `tests/` | put-call parity, IV round trip and bounds, vega |
 | `figures/` | generated plots |
 
 ## Preview result (Yahoo Finance, one expiry)
