@@ -52,10 +52,10 @@ def step1():
         f, c = r["f"], COLOR[label]
         ax1.plot(f["T"], 100 * (f.F / r["spot"] - 1), "o-", color=c, lw=2, ms=4, label=f"{label}: put-call parity")
         ax1.plot(f["T"], 100 * (f.F_div / r["spot"] - 1), "--", color=c, lw=1.5, label=f"{label}: S exp((r-q)T), OptionMetrics q")
-        ax2.plot(f["T"], -100 * np.log(f.D) / f["T"], "o-", color=c, lw=2, ms=4, label=f"{label}: parity-implied")
-        ax2.plot(f["T"], -100 * np.log(f.D_zero) / f["T"], "--", color=c, lw=1.5, label=f"{label}: zero curve")
+        ax2.plot(f["T"], -100 * np.log(f.D_reg) / f["T"], "o-", color=c, lw=2, ms=4, label=f"{label}: parity regression")
+        ax2.plot(f["T"], -100 * np.log(f.D) / f["T"], "--", color=c, lw=1.5, label=f"{label}: zero curve (used)")
     ax1.set(xlabel="T (years)", ylabel="F / S - 1  (%)", title="Forward from put-call parity vs dividend-yield benchmark")
-    ax2.set(xlabel="T (years)", ylabel="rate (%)", ylim=(-2, 4), title="Discount rate from parity vs zero curve")
+    ax2.set(xlabel="T (years)", ylabel="rate (%)", ylim=(-2, 4), title="Discount rate: parity regression check vs zero curve")
     ax1.legend(frameon=False, fontsize=8)
     ax2.legend(frameon=False, fontsize=8)
     save(fig, "step1_forwards.png")

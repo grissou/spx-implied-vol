@@ -34,19 +34,25 @@ def zero_rate(zero_curve: pd.DataFrame, T) -> np.ndarray:
 
 
 def forwards(q: pd.DataFrame, spot: float, zero_curve: pd.DataFrame, div_yield: float) -> pd.DataFrame:
-    """Per expiry: F and D from C - P = D (F - K) by regression, plus the zero-curve / dividend benchmarks."""
+    """Per expiry: D from the zero curve and F from put-call parity, C - P = D (F - K), at that D.
+
+    Also returns the joint regression estimates (F_reg, D_reg: slope = -D, intercept = D F) and the
+    dividend-yield benchmark F_div = S exp((r - q) T) as cross-checks. D is poorly identified by the
+    regression at short maturities, which is why the pipeline fixes it from the zero curve.
+    """
     rows = []
     for exdate, g in q.groupby("exdate"):
         piv = g.pivot(index="strike", columns="cp", values="mid").dropna()
         piv = piv[abs(piv.index / spot - 1) <= PARITY_BAND]
         if len(piv) < 3:
             continue
+        T = g["T"].iloc[0]
+        D = float(np.exp(-zero_rate(zero_curve, T) * T))
         slope, intercept = np.polyfit(piv.index, piv.C - piv.P, 1)
-        rows.append(dict(exdate=exdate, T=g["T"].iloc[0], n_pairs=len(piv), F=-intercept / slope, D=-slope))
+        rows.append(dict(exdate=exdate, T=T, n_pairs=len(piv), D=D, F=(piv.index + (piv.C - piv.P) / D).mean(),
+                         F_reg=-intercept / slope, D_reg=-slope))
     f = pd.DataFrame(rows)
-    r = zero_rate(zero_curve, f["T"])
-    f["D_zero"] = np.exp(-r * f["T"])
-    f["F_div"] = spot * np.exp((r - div_yield / 100) * f["T"])
+    f["F_div"] = spot * np.exp((zero_rate(zero_curve, f["T"]) - div_yield / 100) * f["T"])
     return f
 
 
