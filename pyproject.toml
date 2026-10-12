@@ -5,8 +5,6 @@ description = "SPX implied vol surface, risk-neutral density and local vol Monte
 requires-python = ">=3.11"
 dependencies = ["numpy", "pandas", "scipy", "matplotlib", "pyarrow", "wrds"]
 
-[project.optional-dependencies]
-yf = ["yfinance"]  # fallback data source, see scripts/yf_density.py
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -49,7 +49,7 @@ def fit_svi(k, w, weights=None):
     best = None
     for rho0 in (-0.7, -0.3, 0.0):
         for m0 in (-0.1, 0.0, 0.1):
-            x0 = [0.5 * w.min(), 0.1, rho0, m0, 0.1]
+            x0 = [0.5 * w.min(), 0.1, rho0, np.clip(m0, k.min(), k.max()), 0.1]
             res = least_squares(resid, x0, bounds=(lb, ub))
             if best is None or res.cost < best.cost:
                 best = res
