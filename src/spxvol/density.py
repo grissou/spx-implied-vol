@@ -7,7 +7,7 @@ from .black import black_price
 from .svi import svi_w
 
 
-def strike_grid(F, lo=0.3, hi=2.0, n=4001):
+def strike_grid(F, lo=0.05, hi=4.0, n=8001):
     return np.linspace(lo * F, hi * F, n)
 
 

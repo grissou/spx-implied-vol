@@ -130,5 +130,37 @@ def step2(res):
     return res
 
 
+def step3(res, targets=(30, 91)):
+    """Risk-neutral density vs lognormal at the expiries nearest 1 and 3 months."""
+    from spxvol.density import density_stats, lognormal_density, rn_density, strike_grid
+    from spxvol.surface import PARAMS
+    from spxvol.svi import svi_w
+
+    stats = []
+    fig, axes = plt.subplots(1, len(targets), figsize=(12, 4.4), sharey=True)
+    style(fig, axes)
+    for ax, days in zip(axes, targets):
+        for label, r in res.items():
+            s = r["slices"]
+            row = s.iloc[(s["T"] * 365 - days).abs().argmin()]
+            p, F, T, D = row[PARAMS].values.astype(float), row.F, row["T"], row.D
+            K = strike_grid(F)
+            q = rn_density(p, F, T, D, K)
+            atm = np.sqrt(svi_w(0.0, p) / T)
+            ln = lognormal_density(F, T, atm, K)
+            for name, dens in (("risk-neutral", q), ("lognormal", ln)):
+                stats.append(dict(day=label, expiry=row.exdate.date(), T=round(T, 3), model=name, atm_vol=atm,
+                                  **density_stats(K, dens, F)))
+            ax.plot(K / F, q * F, color=COLOR[label], lw=2, label=f"{label} ({row.exdate.date()})")
+            ax.plot(K / F, ln * F, color=COLOR[label], lw=1.2, ls="--", label=f"lognormal, ATM vol {100 * atm:.0f}%")
+        ax.set(xlim=(0.5, 1.3), xlabel="K / F", title=f"about {days} days to expiry")
+        ax.legend(frameon=False, fontsize=8)
+    axes[0].set_ylabel("density of S_T / F")
+    save(fig, "step3_density.png")
+    st = pd.DataFrame(stats)
+    print(st.round(3).to_string(index=False))
+    return st
+
+
 if __name__ == "__main__":
-    step2(step1())
+    step3(step2(step1()))

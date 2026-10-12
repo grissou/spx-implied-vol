@@ -7,7 +7,7 @@ SPX options from OptionMetrics (WRDS) on a calm day, 19 Feb 2020, and a stress d
 3. Risk-neutral density by Breeden-Litzenberger, compared with a lognormal.
 4. Dupire local vol and Monte Carlo for a down-and-out call and an arithmetic Asian, against Black-Scholes.
 
-Steps 3 and 4 are in progress.
+Step 4 is in progress.
 
 ## Run
 
@@ -40,6 +40,26 @@ gitignored because OptionMetrics data cannot be redistributed.
   in total variance on the calm day, 0.019 on the stress day) and removed by a running maximum in T.
 - SVI is convex in total variance; the stress-day put wing is concave, which is the whole fit error.
 
+## Step 3: risk-neutral density
+
+![density](figures/step3_density.png)
+
+Density of S_T from the SVI slice, q(K) = (1/D) d2C/dK2 on a strike grid from 0.05F to 4F.
+Mass integrates to 1.000 and the mean equals the forward on every slice.
+
+| day | T | ATM vol | log-return skew | excess kurtosis | P(S < 0.9F) RN / LN | P(S < 0.8F) RN / LN |
+|---|---|---|---|---|---|---|
+| calm | 1M | 11% | -3.4 | 23 | 2.6% / 0.1% | 0.5% / 0.0% |
+| calm | 3M | 12% | -2.9 | 16 | 7.5% / 4.2% | 2.2% / 0.0% |
+| stress | 1M | 78% | -1.9 | 5.7 | 29% / 36% | 18% / 19% |
+| stress | 3M | 63% | -2.1 | 5.8 | 33% / 43% | 25% / 30% |
+
+- On the calm day the lognormal at ATM vol gives a 20% fall essentially zero probability; the market
+  gives it 0.5% at one month and 2.2% at three. The skew is the whole crash premium.
+- On the stress day the ATM vol alone already prices the crash. The market density is more peaked
+  and has a fatter far-left tail than the lognormal, but puts a lower probability on moderate falls.
+- Stress-day tails lean on the SVI wings, where the fit is weakest (see Step 2).
+
 ## Layout
 
 | Path | Contents |
@@ -50,7 +70,7 @@ gitignored because OptionMetrics data cannot be redistributed.
 | `src/spxvol/svi.py` | raw SVI fit, butterfly function g(k) |
 | `src/spxvol/surface.py` | per-expiry fits, calendar check, surface grid |
 | `src/spxvol/density.py` | Breeden-Litzenberger density and moments |
-| `scripts/build.py` | rebuilds all figures |
+| `scripts/build.py` | rebuilds all figures and tables |
 
 ## Limitations
 
