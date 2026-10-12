@@ -94,8 +94,9 @@ Three-month options struck at the forward, barrier at 90% of spot, daily monitor
 
 ![convergence](figures/step4_convergence.png)
 
-Antithetic pairs roughly halve the standard error of the barrier price; adding the European call
-as a control variate cuts it by a further order of magnitude.
+Per random draw, antithetic pairs cut the standard error of the barrier price by about 1.7x. The
+European call as a control variate cuts it a further 5x on the calm day but only 1.3x on the stress
+day, where most paths knock out and the vanilla payoff is a poor proxy.
 
 ## Layout
 
@@ -117,6 +118,8 @@ as a control variate cuts it by a further order of magnitude.
 - Calendar consistency is enforced after the fit rather than built into it (SSVI would do that at the cost of fit).
 - Quotes are end-of-day; AM-settled expiries are handled by shortening T by 6.5 hours.
 - Local vol is clipped at a 5% floor where the fitted surface is flat in T; this bites in the far wings only.
+- Local variance is the T-derivative of per-expiry fits, so it inherits their noise as horizontal bands
+  between weekly expiries. Smoothing the term structure (or SSVI) would clean it; vanilla prices are unaffected.
 - Log-Euler needs 8 steps per day on the stress day; a higher-order scheme would be cheaper.
 
 ## What I learned
