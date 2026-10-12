@@ -24,12 +24,12 @@ def svi_g(k, p):
     return (1 - k * w1 / (2 * w)) ** 2 - w1**2 / 4 * (1 / w + 0.25) + w2 / 2
 
 
-def fit_svi(k, w, weights=None):
-    """Weighted least squares in total variance. Bounds a >= 0 and m inside the quoted
-    k range stop the fit landing on the far branch of the hyperbola (rho ~ +1)."""
+def fit_svi(k, w, weights=None, sigma_min=1e-4):
+    """Weighted least squares in total variance. Bounds a >= 0 and m inside the quoted k range
+    keep the fit off the far branch of the hyperbola; sigma_min sets the minimum kink width."""
     k, w = np.asarray(k, float), np.asarray(w, float)
     sw = np.ones_like(k) if weights is None else np.sqrt(np.asarray(weights, float))
-    lb = [0.0, 0.0, -0.999, k.min(), 1e-4]
+    lb = [0.0, 0.0, -0.999, k.min(), sigma_min]
     ub = [np.inf, np.inf, 0.999, k.max(), 2.0]
 
     def resid(p):
@@ -38,7 +38,7 @@ def fit_svi(k, w, weights=None):
     best = None
     for rho0 in (-0.7, -0.3, 0.0):
         for m0 in (-0.1, 0.0, 0.1):
-            x0 = [0.5 * w.min(), 0.1, rho0, np.clip(m0, k.min(), k.max()), 0.1]
+            x0 = [0.5 * w.min(), 0.1, rho0, np.clip(m0, k.min(), k.max()), max(0.1, sigma_min)]
             res = least_squares(resid, x0, bounds=(lb, ub))
             if best is None or res.cost < best.cost:
                 best = res

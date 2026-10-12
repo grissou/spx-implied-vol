@@ -6,16 +6,18 @@ import pandas as pd
 from .svi import fit_svi, svi_g, svi_w
 
 K_CORE = (-0.6, 0.3)
+SIGMA_FLOOR = 0.25  # min SVI kink width as a multiple of the ATM standard deviation sqrt(w_atm)
 PARAMS = ["a", "b", "rho", "m", "sigma"]
 
 
 def fit_slices(otm: pd.DataFrame) -> pd.DataFrame:
-    """Precision-weighted SVI per expiry, with RMSE in vol points and min g(k)."""
+    """Precision-weighted SVI per expiry with a sigma floor, RMSE in vol points and min g(k)."""
     rows = []
     for exdate, g in otm.groupby("exdate"):
         c = g[(g.k >= K_CORE[0]) & (g.k <= K_CORE[1])]
         T = c["T"].iloc[0]
-        p = fit_svi(c.k, c.w, 1 / c.w_sd.clip(lower=1e-6) ** 2)
+        sigma_min = SIGMA_FLOOR * np.sqrt(np.interp(0.0, c.k, c.w))
+        p = fit_svi(c.k, c.w, 1 / c.w_sd.clip(lower=1e-6) ** 2, sigma_min)
         err_vp = 100 * (np.sqrt(svi_w(c.k, p) / T) - c.iv)
         rows.append(dict(exdate=exdate, T=T, F=c.F.iloc[0], D=c.D.iloc[0], n=len(c), k_min=c.k.min(), k_max=c.k.max(),
                          **dict(zip(PARAMS, p)), rmse_vp=np.sqrt(np.mean(err_vp**2)),

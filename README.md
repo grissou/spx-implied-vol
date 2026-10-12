@@ -35,10 +35,13 @@ gitignored because OptionMetrics data cannot be redistributed.
 ![surface](figures/step2_surface.png)
 
 - Raw SVI per expiry, fitted on strikes 55% to 135% of the forward, each quote weighted by the
-  precision implied by its bid-ask. Mean fit error 0.8 vol points on the calm day, 1.8 on the stress day.
-- No butterfly violations. Calendar violations between adjacent expiries are small (worst 0.0014
-  in total variance on the calm day, 0.019 on the stress day) and removed by a running maximum in T.
+  precision implied by its bid-ask. Mean fit error 0.8 vol points on the calm day, 2.2 on the stress day.
 - SVI is convex in total variance; the stress-day put wing is concave, which is the whole fit error.
+  Left alone, the optimiser answers with a straight line and a zero-width kink at the edge of the
+  range, which is a point mass in the density. A floor on sigma of 0.25 x sigma_ATM sqrt(T) removes it
+  at a cost of 0.3 vol points on the stress day and nothing on the calm day.
+- No butterfly violations. Calendar violations between adjacent expiries are small (worst 0.0014
+  in total variance on the calm day, 0.015 on the stress day) and removed by a running maximum in T.
 
 ## Step 3: risk-neutral density
 
@@ -51,8 +54,8 @@ Mass integrates to 1.000 and the mean equals the forward on every slice.
 |---|---|---|---|---|---|---|
 | calm | 1M | 11% | -3.4 | 23 | 2.6% / 0.1% | 0.5% / 0.0% |
 | calm | 3M | 12% | -2.9 | 16 | 7.5% / 4.2% | 2.2% / 0.0% |
-| stress | 1M | 78% | -1.9 | 5.7 | 29% / 36% | 18% / 19% |
-| stress | 3M | 63% | -2.1 | 5.8 | 33% / 43% | 25% / 30% |
+| stress | 1M | 78% | -1.9 | 5.9 | 29% / 36% | 18% / 19% |
+| stress | 3M | 63% | -2.1 | 6.1 | 32% / 43% | 24% / 30% |
 
 - On the calm day the lognormal at ATM vol gives a 20% fall essentially zero probability; the market
   gives it 0.5% at one month and 2.2% at three. The skew is the whole crash premium.
