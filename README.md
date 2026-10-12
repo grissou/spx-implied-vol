@@ -23,7 +23,10 @@ quoted option, and uses it to price two options whose value depends on the path 
 - **Local volatility** is a model in which volatility depends on the index level and time. It is
   the unique such model that reproduces every quoted option price at once, so it is the natural tool
   for pricing options that quotes do not cover.
-- **Monte Carlo** simulates many possible index paths under a model and averages the payoff.
+- **Monte Carlo** simulates many possible index paths under a model and averages the payoff. The
+  answer comes with a standard error, the statistical uncertainty from using a finite number of paths.
+- **Arbitrage** is a combination of trades that can only make money. A set of option prices that
+  allows one is inconsistent, so "arbitrage-free" is the basic sanity requirement on any fitted curve.
 
 ## Main outputs
 
@@ -56,9 +59,14 @@ out-of-the-money quotes only. An in-the-money option's time value is a tiny frac
 and a deep in-the-money call at 8% vol turned out to have time value below float precision, so its
 implied vol is numerically meaningless.
 
-A call and a put at the same strike obey put-call parity, C - P = D (F - K), with D the discount
-factor from the zero curve. That gives the forward F per expiry from strikes within 10% of spot
-without any model. Implied vols come from Black-76 on the forward, inverted with Brent's method.
+A call and a put at the same strike obey put-call parity, C - P = D (F - K). Owning the call and
+selling the put is the same as agreeing to buy the index at K, whatever happens, so the pair must
+cost what that agreement is worth: the gap between forward and strike, discounted to today. D is
+the discount factor, the value today of one dollar at expiry, taken from the zero curve (the
+interest rates OptionMetrics supplies). With D known, every call-put pair gives an estimate of F,
+and I average those from strikes within 10% of spot. No model is involved. Implied vols then come
+from the Black-76 formula on the forward, inverted numerically with Brent's method (a safe
+root-finder: the price rises with volatility, so there is exactly one answer).
 
 ![forwards](figures/1_forwards_vs_zero_curve.png)
 
@@ -81,9 +89,12 @@ inspired", Gatheral 2004) is the standard choice for equity index smiles.
 
 ### The model
 
-Each expiry gets its own slice. The variable is total variance w = sigma^2 T, the squared implied
-vol times time to expiry, as a function of log-moneyness k = ln(K/F), the strike's log distance
-from the forward:
+Each expiry gets its own slice. Two changes of variable first. Instead of implied vol I use total
+variance w = sigma^2 T, implied vol squared times the time to expiry: it is the total amount of
+"spread" the market expects by that date, and it is the quantity the no-arbitrage rules are stated
+in. Instead of the strike I use log-moneyness k = ln(K/F): zero at the forward, about -0.1 for a
+strike 10% below it, +0.1 for 10% above, so smiles at different index levels line up. The slice is
+then a hyperbola in k, a rounded V:
 
     w(k) = a + b [ rho (k - m) + sqrt((k - m)^2 + sigma^2) ]
 
@@ -106,10 +117,12 @@ at most linearly in |k|), so SVI extrapolates sensibly beyond the last quote.
 1. Take the out-of-the-money quotes for that expiry with strikes between 55% and 135% of the
    forward. That range holds essentially all the probability mass and all the Step 4 payoffs.
 2. Convert each implied vol to total variance, w = sigma^2 T.
-3. Give each quote a weight 1/var(w). The uncertainty in w comes from the bid-ask: half the spread
-   in price, divided by vega to get vol units, times 2 sigma T to get variance units. Tight
-   near-the-money quotes get large weights, wide wing quotes small ones. Unweighted least squares in
-   w does the opposite, because w itself is largest in the wings, and it misses the smile minimum.
+3. Give each quote a weight equal to one over its uncertainty squared, so precise quotes count
+   more. The uncertainty comes from the bid-ask spread: half the spread in price, converted to vol
+   units by dividing by vega (how much the price moves per unit of vol), then to variance units.
+   Tight near-the-money quotes get large weights, wide wing quotes small ones. Unweighted least
+   squares in w does the opposite, because w itself is largest in the wings, and it misses the
+   smile minimum.
 4. Minimise the weighted sum of squared errors with bounded least squares, from nine starting
    points over (rho, m), keeping the best.
 5. Record the fit error in vol points and the minimum of the butterfly function g(k) over the
@@ -129,8 +142,11 @@ already above it.
 
 ### Arbitrage checks
 
-Butterfly arbitrage means a negative probability somewhere, i.e. a butterfly spread with negative
-price. Gatheral and Jacquier (2014) show a slice is free of it if and only if
+Butterfly arbitrage means the fitted curve implies a negative probability for some range of index
+levels, which would let you buy a spread of options that pays out for free. You do not need to read
+the formula to use it: it is a function of the curve and its slope and curvature whose sign is the
+sign of the implied probability. Gatheral and Jacquier (2014) show a slice is free of butterfly
+arbitrage if and only if
 
     g(k) = (1 - k w'/(2w))^2 - (w'/4) (1/w + 1/4) + w''/2  >=  0
 
@@ -166,9 +182,12 @@ size of the largest running-maximum adjustment is reported so the correction sta
 
 ## Step 3: risk-neutral density
 
-Breeden and Litzenberger (1978): the second derivative of the call price with respect to strike is
-the discounted probability density of the index at expiry. Intuitively, a tight spread of calls
-pays off only if the index lands in a narrow band, so its price is the probability of that band.
+A probability density is a curve whose area between two index levels is the probability the index
+finishes between them. Breeden and Litzenberger (1978) showed the option market draws this curve
+for you: the second derivative of the call price with respect to strike is the discounted density.
+Intuitively, buy a call at K - h, sell two at K, buy one at K + h. That package pays out only if
+the index lands within h of K, so its price, divided by the size of the payout, is the probability
+of that narrow band. Let h shrink and you have the density at K.
 From the slice's call prices C(K) on a strike grid from 0.05F to 4F, q(K) = (1/D) d2C/dK2 by
 central differences. The benchmark is the lognormal distribution Black-Scholes assumes, with the same
 forward and the ATM vol. The top row is the density; the bottom row is its running total, which
@@ -192,12 +211,21 @@ so I would not quote the 24% to more than one significant figure.
 
 ## Step 4: local vol and Monte Carlo
 
-Dupire (1994) showed that a surface of vanilla prices pins down a unique local volatility
-sigma_loc(index level, time). In total variance the formula is sigma_loc^2(k, T) = (dw/dT) / g(k, T):
-the calendar slope over the butterfly term from Step 2. It is evaluated on the surface grid and
-clipped to [5%, 300%]. Monte Carlo is log-Euler on k_t = ln(S_t / F_t), so no rates or dividends
-appear; 200,000 antithetic paths, 8 steps per day. At daily steps the discretisation bias on the
-stress day is 0.2 to 0.5 vol points, several standard errors.
+Implied vol is one number per option, an average over the option's whole life and every level
+the index might visit. Local vol asks a sharper question: if the index is at level S at time t,
+how volatile does the market think it is right then? Dupire (1994) showed the surface of vanilla
+prices answers it uniquely. In total variance the formula is sigma_loc^2(k, T) = (dw/dT) / g(k, T):
+how fast total variance grows with maturity, divided by the butterfly term from Step 2, which
+measures how much probability the market puts at that level. Where the market expects more
+spread to arrive and puts little probability there, local vol is high; that is the far downside.
+It is evaluated on the surface grid and clipped to [5%, 300%] where the division misbehaves.
+
+The simulation moves the index one small step at a time: each step's random move is scaled by the
+local vol at the current level and time. I simulate k_t = ln(S_t / F_t) rather than the index
+itself, so no rates or dividends appear; 200,000 paths in antithetic pairs (each random path is
+run alongside its mirror image, which cancels much of the noise), 8 steps per day. At daily steps
+the stress-day results were biased by 0.2 to 0.5 vol points, several standard errors, because the
+local vol changes too quickly within a day to hold it fixed.
 
 Validation comes first: European calls priced by simulation under local vol must reproduce the
 surface they were built from. They do, within 2 standard errors at every strike on both days.
@@ -209,9 +237,11 @@ Two path-dependent options, three months, struck at the forward. A down-and-out 
 that is cancelled if the index ever closes below a barrier, here 90% of spot. An arithmetic Asian
 call pays on the average daily close rather than the final level. Black-Scholes and local vol agree
 on every vanilla, so any difference here is the path. "BS with term structure" uses the ATM vol
-curve with no skew, to separate the two effects. Control variates: the European call for the
-barrier, the geometric Asian (closed form) for the Asian under Black-Scholes. Prices in % of the
-forward; s.e. at most 0.02 on the stress day and 0.006 on the calm day.
+curve with no skew, to separate the two effects. To cut the noise further I use control variates:
+simulate alongside each exotic a related option whose exact price is known (the plain call for the
+barrier, a geometric-average Asian for the arithmetic one) and correct the exotic's estimate by
+however much the known one came out wrong. Prices in % of the forward; standard error at most 0.02
+on the stress day and 0.006 on the calm day.
 
 | day | option | Black-Scholes | BS with ATM term structure | local vol |
 |---|---|---|---|---|
