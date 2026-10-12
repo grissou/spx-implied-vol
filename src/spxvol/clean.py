@@ -1,21 +1,18 @@
-"""Step 1: clean one day of SPX quotes, back out forwards and discount factors, recompute implied vols.
-
-Filters (agreed): bid > 0, ask > bid, relative spread <= 50%, 7 <= days to expiry <= 730,
-PM-settled contract kept where AM and PM share an expiry date, OTM options only.
-"""
+"""Step 1: filter quotes, forward and discount factor per expiry, own implied vols."""
 
 import numpy as np
 import pandas as pd
 
-from .black import implied_vol_vec
+from .black import black_vega, implied_vol_vec
 
 MAX_REL_SPREAD = 0.5
 MIN_DAYS, MAX_DAYS = 7, 730
 PARITY_BAND = 0.10          # strikes within +-10% of spot used for put-call parity
-AM_SETTLE_OFFSET = 6.5 / 24  # AM expiries settle at the open, 6.5 hours before the close
+AM_SETTLE_OFFSET = 6.5 / 24  # AM-settled expiries end at the open
 
 
 def clean_quotes(options: pd.DataFrame) -> pd.DataFrame:
+    """bid > 0, ask > bid, relative spread <= 50%, 7 to 730 days, PM contract where AM and PM coexist."""
     o = options.rename(columns={"best_bid": "bid", "best_offer": "ask", "cp_flag": "cp"})
     o["mid"] = (o.bid + o.ask) / 2
     o["days"] = (o.exdate - o.date).dt.days
@@ -34,12 +31,8 @@ def zero_rate(zero_curve: pd.DataFrame, T) -> np.ndarray:
 
 
 def forwards(q: pd.DataFrame, spot: float, zero_curve: pd.DataFrame, div_yield: float) -> pd.DataFrame:
-    """Per expiry: D from the zero curve and F from put-call parity, C - P = D (F - K), at that D.
-
-    Also returns the joint regression estimates (F_reg, D_reg: slope = -D, intercept = D F) and the
-    dividend-yield benchmark F_div = S exp((r - q) T) as cross-checks. D is poorly identified by the
-    regression at short maturities, which is why the pipeline fixes it from the zero curve.
-    """
+    """Per expiry: D from the zero curve, F from C - P = D (F - K) near the money.
+    F_reg, D_reg (joint regression) and F_div = S exp((r - q) T) are kept as checks."""
     rows = []
     for exdate, g in q.groupby("exdate"):
         piv = g.pivot(index="strike", columns="cp", values="mid").dropna()
@@ -57,11 +50,13 @@ def forwards(q: pd.DataFrame, spot: float, zero_curve: pd.DataFrame, div_yield: 
 
 
 def otm_quotes(q: pd.DataFrame, f: pd.DataFrame) -> pd.DataFrame:
-    """OTM quotes (puts below F, calls above) with own Black-76 implied vol, log-moneyness and total variance."""
+    """OTM quotes with own implied vol, k, total variance w and its bid-ask uncertainty w_sd."""
     q = q.merge(f[["exdate", "F", "D"]], on="exdate")
     q = q[((q.cp == "P") & (q.strike < q.F)) | ((q.cp == "C") & (q.strike > q.F))].copy()
     q["iv"] = implied_vol_vec(q.mid, q.F, q.strike, q["T"], q.D, q.cp == "C")
     q = q.dropna(subset=["iv"])
     q["k"] = np.log(q.strike / q.F)
     q["w"] = q.iv**2 * q["T"]
+    vega = black_vega(q.F, q.strike, q["T"], q.iv, q.D)
+    q["w_sd"] = q.iv * q["T"] * (q.ask - q.bid) / vega
     return q.reset_index(drop=True)

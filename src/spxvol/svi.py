@@ -1,14 +1,7 @@
-"""Raw SVI (Gatheral 2004) for one expiry: total variance w(k) in log-moneyness k = ln(K/F).
-
-    w(k) = a + b [ rho (k - m) + sqrt((k - m)^2 + sigma^2) ],   b >= 0, |rho| < 1, sigma > 0
-
-Butterfly (no-arbitrage) check is Gatheral & Jacquier (2014) g(k) >= 0, which is
-proportional to the risk-neutral density in k.
-"""
+"""Raw SVI for one expiry: w(k) = a + b [rho (k - m) + sqrt((k - m)^2 + sigma^2)], k = ln(K/F)."""
 
 import numpy as np
 from scipy.optimize import least_squares
-
 
 
 def svi_w(k, p):
@@ -26,18 +19,14 @@ def svi_derivs(k, p):
 
 
 def svi_g(k, p):
-    """Gatheral's butterfly function; slice is free of butterfly arbitrage iff g >= 0."""
+    """Gatheral-Jacquier butterfly function: no butterfly arbitrage iff g >= 0."""
     w, w1, w2 = svi_derivs(k, p)
     return (1 - k * w1 / (2 * w)) ** 2 - w1**2 / 4 * (1 / w + 0.25) + w2 / 2
 
 
 def fit_svi(k, w, weights=None):
-    """Least-squares fit of raw SVI to market total variances. Returns (a, b, rho, m, sigma).
-
-    Well-posedness constraints: a >= 0, and the smile minimum m must lie inside the
-    quoted k range. Without them the optimiser can fit a steep skew with the far
-    branch of the hyperbola (rho ~ +1, m far right), which extrapolates nonsensically.
-    """
+    """Weighted least squares in total variance. Bounds a >= 0 and m inside the quoted
+    k range stop the fit landing on the far branch of the hyperbola (rho ~ +1)."""
     k, w = np.asarray(k, float), np.asarray(w, float)
     sw = np.ones_like(k) if weights is None else np.sqrt(np.asarray(weights, float))
     lb = [0.0, 0.0, -0.999, k.min(), 1e-4]

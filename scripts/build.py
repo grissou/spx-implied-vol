@@ -1,4 +1,4 @@
-"""Rebuild every figure from the cached WRDS data:  python scripts/build.py"""
+"""python scripts/build.py  -> rebuilds every figure from data/"""
 
 from pathlib import Path
 
@@ -35,7 +35,7 @@ def save(fig, name):
 
 
 def step1():
-    """Clean quotes, forwards and discount factors, own IV vs OptionMetrics. Returns per-date results."""
+
     res = {}
     for label, date in DATES.items():
         raw = load_day(date)
@@ -50,12 +50,12 @@ def step1():
     style(fig, (ax1, ax2))
     for label, r in res.items():
         f, c = r["f"], COLOR[label]
-        ax1.plot(f["T"], 100 * (f.F / r["spot"] - 1), "o-", color=c, lw=2, ms=4, label=f"{label}: put-call parity")
-        ax1.plot(f["T"], 100 * (f.F_div / r["spot"] - 1), "--", color=c, lw=1.5, label=f"{label}: S exp((r-q)T), OptionMetrics q")
-        ax2.plot(f["T"], -100 * np.log(f.D_reg) / f["T"], "o-", color=c, lw=2, ms=4, label=f"{label}: parity regression")
-        ax2.plot(f["T"], -100 * np.log(f.D) / f["T"], "--", color=c, lw=1.5, label=f"{label}: zero curve (used)")
-    ax1.set(xlabel="T (years)", ylabel="F / S - 1  (%)", title="Forward from put-call parity vs dividend-yield benchmark")
-    ax2.set(xlabel="T (years)", ylabel="rate (%)", ylim=(-2, 4), title="Discount rate: parity regression check vs zero curve")
+        ax1.plot(f["T"], 100 * (f.F / r["spot"] - 1), "o-", color=c, lw=2, ms=4, label=f"{label}: parity")
+        ax1.plot(f["T"], 100 * (f.F_div / r["spot"] - 1), "--", color=c, lw=1.5, label=f"{label}: S exp((r-q)T)")
+        ax2.plot(f["T"], -100 * np.log(f.D_reg) / f["T"], "o-", color=c, lw=2, ms=4, label=f"{label}: regression")
+        ax2.plot(f["T"], -100 * np.log(f.D) / f["T"], "--", color=c, lw=1.5, label=f"{label}: zero curve")
+    ax1.set(xlabel="T (years)", ylabel="F / S - 1  (%)", title="Forward: parity vs dividend-yield benchmark")
+    ax2.set(xlabel="T (years)", ylabel="rate (%)", ylim=(-2, 4), title="Discount rate: regression vs zero curve")
     ax1.legend(frameon=False, fontsize=8)
     ax2.legend(frameon=False, fontsize=8)
     save(fig, "step1_forwards.png")
@@ -73,5 +73,62 @@ def step1():
     return res
 
 
+
+
+def step2(res):
+    from spxvol.surface import K_CORE, Surface, calendar_violations, fit_slices
+    from spxvol.svi import svi_w
+
+    for label, r in res.items():
+        r["slices"] = s = fit_slices(r["otm"])
+        r["surface"] = Surface(s)
+        cal = calendar_violations(s)
+        print(f"{label}: {len(s)} slices, RMSE {s.rmse_vp.mean():.2f} vol pts (max {s.rmse_vp.max():.2f}), "
+              f"butterfly violations {int((s.g_min < 0).sum())}, calendar violations {len(cal)} "
+              f"(worst dw {cal.dw.min() if len(cal) else 0:.4f}), surface adjustment {r['surface'].adjusted:.4f}")
+
+    for label, r in res.items():
+        s, otm = r["slices"], r["otm"]
+        pick = s.iloc[np.linspace(0, len(s) - 1, 8).round().astype(int)]
+        fig, axes = plt.subplots(2, 4, figsize=(16, 7))
+        style(fig, axes)
+        for ax, (_, row) in zip(axes.ravel(), pick.iterrows()):
+            g = otm[otm.exdate == row.exdate]
+            kk = np.linspace(g.k.min(), g.k.max(), 300)
+            p = row[["a", "b", "rho", "m", "sigma"]].values.astype(float)
+            ax.axvspan(*K_CORE, color="#e6e5e1", alpha=0.5, lw=0)
+            ax.scatter(g.k, 100 * g.iv, s=6, color=INK, alpha=0.5)
+            ax.plot(kk, 100 * np.sqrt(svi_w(kk, p) / row["T"]), color=COLOR[label], lw=2)
+            ax.set_title(f"{row.exdate.date()}  T={row['T']:.2f}  RMSE {row.rmse_vp:.2f}", fontsize=10)
+            ax.set_xlabel("k = ln(K/F)")
+        axes[0, 0].set_ylabel("implied vol (%)"); axes[1, 0].set_ylabel("implied vol (%)")
+        fig.suptitle(f"{label}: market IV vs SVI (fitted on shaded range)", color=INK, x=0.01, ha="left")
+        save(fig, f"step2_smiles_{label.split()[1]}.png")
+
+    fig = plt.figure(figsize=(13, 5.5), facecolor=SURFACE)
+    for i, (label, r) in enumerate(res.items()):
+        ax = fig.add_subplot(1, 2, i + 1, projection="3d")
+        sf = r["surface"]
+        K, T = np.meshgrid(sf.k, sf.T)
+        ax.plot_surface(K, T, 100 * np.sqrt(sf.W / sf.T[:, None]), cmap="Blues" if "calm" in label else "Oranges",
+                        rstride=1, cstride=4, lw=0, antialiased=True)
+        ax.set(xlabel="k", ylabel="T (years)", zlabel="IV (%)", title=label)
+        ax.set_facecolor(SURFACE); ax.view_init(elev=25, azim=-130)
+    save(fig, "step2_surface.png")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.2))
+    style(fig, (ax1, ax2))
+    for label, r in res.items():
+        s = r["slices"]
+        ax1.plot(s["T"], s.rmse_vp, "o-", color=COLOR[label], lw=2, ms=4, label=label)
+        ax2.plot(s["T"], s.g_min, "o-", color=COLOR[label], lw=2, ms=4, label=label)
+    ax1.set(xlabel="T (years)", ylabel="RMSE (vol points)", title="SVI fit error per expiry")
+    ax2.axhline(0, color=MUTED, lw=1)
+    ax2.set(xlabel="T (years)", ylabel="min g(k)", title="Butterfly check: min g(k) per expiry")
+    ax1.legend(frameon=False); ax2.legend(frameon=False)
+    save(fig, "step2_fit_quality.png")
+    return res
+
+
 if __name__ == "__main__":
-    step1()
+    step2(step1())

@@ -1,10 +1,4 @@
-"""Risk-neutral density of S_T by Breeden-Litzenberger from an SVI slice.
-
-    C(K) = D * E[(S_T - K)^+]   =>   q(K) = (1/D) d^2 C / dK^2
-
-Call prices come from the SVI smile on a fine uniform strike grid, never from raw
-quotes, and the second derivative is taken by central differences.
-"""
+"""Breeden-Litzenberger density q(K) = (1/D) d2C/dK2 from SVI call prices on a fine strike grid."""
 
 import numpy as np
 from scipy.stats import norm
@@ -18,21 +12,21 @@ def strike_grid(F, lo=0.3, hi=2.0, n=4001):
 
 
 def rn_density(p, F, T, D, K):
-    """Breeden-Litzenberger density on strike grid K from SVI parameters p."""
+    """Central differences of SVI-implied call prices."""
     sigma = np.sqrt(svi_w(np.log(K / F), p) / T)
     C = black_price(F, K, T, sigma, D, True)
     return np.gradient(np.gradient(C, K), K) / D
 
 
 def lognormal_density(F, T, sigma, K):
-    """Density of S_T under Black with constant vol sigma (same forward)."""
+    """Constant-vol benchmark with the same forward."""
     sT = sigma * np.sqrt(T)
     d2 = (np.log(F / K) - 0.5 * sT**2) / sT
     return norm.pdf(d2) / (K * sT)
 
 
 def density_stats(K, q, F):
-    """Mass, mean, log-return skew / excess kurtosis, and left-tail probabilities."""
+    """Mass, mean, log-return moments and left-tail probabilities."""
     tr = np.trapezoid
     x = np.log(K / F)
     mass = tr(q, K)

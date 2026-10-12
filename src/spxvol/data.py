@@ -1,8 +1,4 @@
-"""Pull one trading day of SPX option data from WRDS OptionMetrics and cache it as parquet.
-
-No filtering happens here beyond secid and date: cleaning is a separate, explicit step.
-Credentials come from ~/.pgpass; nothing is stored in code.
-"""
+"""One trading day of SPX data from WRDS OptionMetrics, cached as parquet. No filtering here."""
 
 from pathlib import Path
 
@@ -11,11 +7,8 @@ import pandas as pd
 SPX_SECID = 108105
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
-OPTION_COLS = [
-    "date", "exdate", "cp_flag", "strike_price", "best_bid", "best_offer",
-    "volume", "open_interest", "impl_volatility", "delta", "am_settlement",
-    "expiry_indicator", "forward_price", "ss_flag", "symbol",
-]
+OPTION_COLS = ["date", "exdate", "cp_flag", "strike_price", "best_bid", "best_offer",
+               "impl_volatility", "am_settlement"]
 
 
 def _query_day(db, date: str) -> dict[str, pd.DataFrame]:
@@ -44,11 +37,7 @@ def _query_day(db, date: str) -> dict[str, pd.DataFrame]:
 
 
 def load_day(date: str, db=None) -> dict[str, pd.DataFrame]:
-    """Return {'options', 'spot', 'zero_curve', 'div_yield'} for one date (YYYY-MM-DD).
-
-    Reads from data/<date>/ if cached, otherwise queries WRDS (opening a
-    connection if `db` is None) and writes the cache.
-    """
+    """{'options', 'spot', 'zero_curve', 'div_yield'} for one date, from data/<date>/ or WRDS."""
     cache = DATA_DIR / date
     names = ["options", "spot", "zero_curve", "div_yield"]
     if all((cache / f"{n}.parquet").exists() for n in names):

@@ -1,67 +1,62 @@
-# SPX implied volatility surface, risk-neutral density and local vol
+# SPX implied vol surface, risk-neutral density and local vol
 
-From SPX option prices (OptionMetrics via WRDS): an arbitrage-free SVI implied
-volatility surface, the risk-neutral density by Breeden-Litzenberger, and a Dupire
-local vol model with Monte Carlo pricing of path-dependent options, on a calm day
-and a stress day.
+SPX options from OptionMetrics (WRDS) on a calm day, 19 Feb 2020, and a stress day, 16 Mar 2020.
 
-**Status:** Black-76 pricer, implied vol solver, SVI slice fit and risk-neutral
-density are done. WRDS pull, surface across expiries, Dupire local vol
-and Monte Carlo are next.
+1. Clean quotes, forward and discount factor per expiry from put-call parity, own implied vols.
+2. SVI surface with butterfly and calendar arbitrage checks.
+3. Risk-neutral density by Breeden-Litzenberger, compared with a lognormal.
+4. Dupire local vol and Monte Carlo for a down-and-out call and an arithmetic Asian, against Black-Scholes.
 
-## Setup
+Steps 3 and 4 are in progress.
+
+## Run
 
 ```
-python -m venv .venv
-.venv/bin/pip install -e ".[yf]"
+python -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/python scripts/build.py
 ```
 
-WRDS credentials live in `~/.pgpass`, never in code. Raw data is cached in `data/`,
-which is gitignored because OptionMetrics data cannot be redistributed.
+The first run needs WRDS access through `~/.pgpass`; data is cached in `data/`, which is
+gitignored because OptionMetrics data cannot be redistributed.
+
+## Step 1: forwards and implied vols
+
+![forwards](figures/step1_forwards.png)
+
+- Forward from put-call parity, discount factor from the zero curve. The joint regression recovers
+  the same forward to 0.01% but its discount factor is noise below three months.
+- On 16 March OptionMetrics' dividend yield reads 0.4%, while parity implies about 2%. Their
+  implied vols inherit the error: ours differ by 0.7 vol points with opposite signs on puts and calls.
+  Feeding their forward into our solver reproduces their numbers to 0.03 vol points.
+
+## Step 2: SVI surface
+
+![smiles](figures/step2_smiles_2020-03-16.png)
+![surface](figures/step2_surface.png)
+
+- Raw SVI per expiry, fitted on strikes 55% to 135% of the forward, each quote weighted by the
+  precision implied by its bid-ask. Mean fit error 0.8 vol points on the calm day, 1.8 on the stress day.
+- No butterfly violations. Calendar violations between adjacent expiries are small (worst 0.0014
+  in total variance on the calm day, 0.019 on the stress day) and removed by a running maximum in T.
+- SVI is convex in total variance; the stress-day put wing is concave, which is the whole fit error.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/spxvol/black.py` | Black-76 pricer on the forward, vega, Brent implied vol |
-| `src/spxvol/svi.py` | raw SVI fit per expiry, Gatheral butterfly check g(k) |
-| `src/spxvol/density.py` | Breeden-Litzenberger density from SVI, lognormal benchmark, moments and tail probabilities |
-| `src/spxvol/data.py` | one-day SPX pull from WRDS OptionMetrics with parquet cache |
-| `scripts/yf_density.py` | fallback: same pipeline on today's Yahoo Finance chain |
-| `figures/` | generated plots |
-
-## Preview result (Yahoo Finance, one expiry)
-
-`python scripts/yf_density.py 2026-12-18` on 12 Oct 2026:
-
-![SPX 2026-12-18 smile and risk-neutral density](figures/yf_density_2026-12-18.png)
-
-| | risk-neutral | lognormal at ATM vol |
-|---|---|---|
-| log-return skew | -3.0 | 0 |
-| excess kurtosis | 22 | 0 |
-| P(fall > 10%) | 5.9% | 4.7% |
-| P(fall > 20%) | 1.1% | 0.02% |
-
-## Method
-
-1. Keep quotes with bid > 0, ask > bid and relative spread at most 50%; use OTM
-   options only (puts below the forward, calls above).
-2. Back out the forward F and discount factor D per expiry from put-call parity,
-   C - P = D (F - K), by regressing C - P on K near the money.
-3. Recompute implied vols from mid prices with Black-76 on the forward and Brent's method.
-4. Fit raw SVI to total variance w(k) = sigma^2 T in log-moneyness k = ln(K/F),
-   with a >= 0 and the smile minimum inside the quoted range so the fit is
-   well-posed. Check Gatheral's g(k) >= 0 for butterfly arbitrage.
-5. Density q(K) = (1/D) d^2C/dK^2 by central differences of SVI-implied call prices
-   on a fine strike grid. Compare with the lognormal at ATM vol.
+| `src/spxvol/black.py` | Black-76 pricer, vega, Brent implied vol |
+| `src/spxvol/data.py` | one-day WRDS pull with parquet cache |
+| `src/spxvol/clean.py` | filters, forwards, own implied vols |
+| `src/spxvol/svi.py` | raw SVI fit, butterfly function g(k) |
+| `src/spxvol/surface.py` | per-expiry fits, calendar check, surface grid |
+| `src/spxvol/density.py` | Breeden-Litzenberger density and moments |
+| `scripts/build.py` | rebuilds all figures |
 
 ## Limitations
 
-- Yahoo quotes are delayed and not time-synchronised; deep OTM puts trade in
-  50-cent markets so their implied vols are rough. The WRDS data will replace this.
-- Raw SVI per expiry does not guarantee calendar consistency across expiries.
-- SVI with rho near -1 misses the slight upturn in far OTM call vols.
+- Raw SVI cannot fit concave total variance, so stress-day wings beyond the fitted range are extrapolated.
+- Calendar consistency is enforced after the fit rather than built into it (SSVI would do that at the cost of fit).
+- Quotes are end-of-day; AM-settled expiries are handled by shortening T by 6.5 hours.
 
 ## What I learned
 
