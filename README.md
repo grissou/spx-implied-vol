@@ -1,17 +1,29 @@
 # SPX implied vol surface, risk-neutral density and local vol
 
-SPX index options from OptionMetrics (WRDS) on a calm day, 19 Feb 2020, and a stress day,
-16 Mar 2020. From the raw quotes: forwards by put-call parity, an SVI surface checked for
-arbitrage, the risk-neutral density by Breeden-Litzenberger, and a Dupire local vol model used
-to price a barrier option and an Asian option by Monte Carlo against Black-Scholes.
+What the options market on the S&P 500 said about the future on two days: 19 Feb 2020, the day
+the index hit its all-time high before Covid, and 16 Mar 2020, the day the VIX fear index closed
+at a record 83. From thousands of raw option quotes on each day, this project recovers the
+market's implied probability distribution for the index, builds a pricing model that matches every
+quoted option, and uses it to price two options whose value depends on the path the index takes.
 
-Three results worth knowing before the detail:
+## The idea in plain terms
 
-- OptionMetrics' dividend yield collapsed on 16 Mar 2020 and their implied vols inherit it.
-  Parity-implied forwards fix it and reproduce their vols to 0.03 vol points once the same forward is used.
-- The market priced a 20% fall over three months at 2.2% on the calm day; the lognormal at ATM vol says 0.0%.
-- For path-dependent options, skew and term structure act separately: the barrier price moves with
-  the skew, the Asian price with the term structure.
+- **An option** is a contract paying off if the index finishes above (call) or below (put) a
+  chosen level, the strike, at a chosen date, the expiry. Its price is mostly a bet on how much the
+  index will move.
+- **Implied volatility** is that bet in standard units: the annualised standard deviation of index
+  returns that makes the Black-Scholes formula reproduce the quoted price. One number per option.
+- **The smile** is implied volatility plotted against strike. For an index it slopes down: puts
+  that pay off in a crash cost more than the formula's single volatility would suggest. The slope is
+  the skew, and the whole set of smiles across expiries is the volatility surface.
+- **The forward** is the price at which you could agree today to buy the index at expiry. It is
+  spot adjusted for interest and dividends, and every strike in this project is measured against it.
+- **The risk-neutral density** is the probability distribution of the index at expiry that the
+  option prices imply. It is what the market is willing to pay for each outcome, not a forecast.
+- **Local volatility** is a model in which volatility depends on the index level and time. It is
+  the unique such model that reproduces every quoted option price at once, so it is the natural tool
+  for pricing options that quotes do not cover.
+- **Monte Carlo** simulates many possible index paths under a model and averages the payoff.
 
 ## Run
 
@@ -26,12 +38,15 @@ Keep the venv outside cloud-synced folders.
 
 ## Step 1: quotes, forwards, implied vols
 
-Filters: bid > 0, ask > bid, spread at most 50% of mid, 7 to 730 days to expiry. SPX monthlies settle
-on the Friday open and SPXW weeklies on the close; where both exist for one date the PM contract
-is kept, and AM-settled T is shortened by 6.5 hours. Only out-of-the-money quotes are used.
+Raw quotes need cleaning, and the forward has to be known before any implied volatility is
+meaningful. Filters: bid > 0, ask > bid, spread at most 50% of mid, 7 to 730 days to expiry. SPX
+monthlies settle on the Friday open and SPXW weeklies on the close; where both exist for one date
+the PM contract is kept, and AM-settled T is shortened by 6.5 hours. Only out-of-the-money quotes
+are used, since in-the-money ones carry almost no volatility information.
 
-Per expiry, put-call parity C - P = D (F - K) gives the forward F for strikes within 10% of spot,
-with D from the zero curve. Implied vols come from Black-76 on the forward, inverted with Brent.
+A call and a put at the same strike obey put-call parity, C - P = D (F - K), with D the discount
+factor from the zero curve. That gives the forward F per expiry from strikes within 10% of spot
+without any model. Implied vols come from Black-76 on the forward, inverted with Brent's method.
 
 ![forwards](figures/step1_forwards.png)
 
@@ -40,10 +55,16 @@ with D from the zero curve. Implied vols come from Black-76 on the forward, inve
 - On 16 March the parity forward is 2.5% below spot at 1.75 years, i.e. the market still priced
   about 2% dividends, while OptionMetrics' dividend yield reads 0.4%. Their implied vols differ from
   ours by 0.7 vol points with opposite signs on puts and calls, the signature of a forward mismatch.
+  Given their forward, our solver reproduces their vols to 0.03 vol points.
 
 ## Step 2: SVI surface
 
-**Model.** Each expiry is a raw SVI slice in total variance w = sigma^2 T against log-moneyness k = ln(K/F):
+Quotes exist only at listed strikes and expiries. A smooth curve through them is needed to take
+derivatives (Step 3) and to price options at arbitrary levels (Step 4), and it must not admit
+arbitrage, i.e. combinations of options with negative price.
+
+**Model.** Each expiry is a raw SVI slice ("stochastic volatility inspired", Gatheral 2004) in
+total variance w = sigma^2 T against log-moneyness k = ln(K/F):
 
     w(k) = a + b [ rho (k - m) + sqrt((k - m)^2 + sigma^2) ]
 
@@ -62,10 +83,11 @@ Nine starting points over (rho, m) guard against local minima. Constraints:
   a point mass in the density. The floor rounds it at a cost of 0.3 vol points on the stress day and
   nothing on the calm day.
 
-**Checks.** Butterfly arbitrage: Gatheral's g(k) >= 0 on every slice (g is proportional to the
-density in k). Calendar arbitrage: w must not decrease in T at any k; adjacent slices are compared
-on the fitted range and violations reported. The surface used downstream interpolates w linearly
-in T between slices, after a running maximum in T removes the violations.
+**Checks.** Butterfly arbitrage (a negative probability somewhere): Gatheral's g(k) >= 0 on every
+slice, since g is proportional to the density in k. Calendar arbitrage (a longer option cheaper
+than a shorter one): w must not decrease in T at any k; adjacent slices are compared on the fitted
+range and violations reported. The surface used downstream interpolates w linearly in T between
+slices after a running maximum in T removes the violations.
 
 ![smiles](figures/step2_smiles_2020-03-16.png)
 ![surface](figures/step2_surface.png)
@@ -77,9 +99,12 @@ in T between slices, after a running maximum in T removes the violations.
 
 ## Step 3: risk-neutral density
 
-From the slice's call prices C(K) on a strike grid from 0.05F to 4F, q(K) = (1/D) d2C/dK2 by central
-differences. Mass integrates to 1.000 and the mean equals the forward on every slice. The lognormal
-benchmark uses the same forward and the ATM vol.
+Breeden and Litzenberger (1978): the second derivative of the call price with respect to strike is
+the discounted probability density of the index at expiry. Intuitively, a tight spread of calls
+pays off only if the index lands in a narrow band, so its price is the probability of that band.
+From the slice's call prices C(K) on a strike grid from 0.05F to 4F, q(K) = (1/D) d2C/dK2 by
+central differences. Mass integrates to 1.000 and the mean equals the forward on every slice. The
+benchmark is the lognormal distribution Black-Scholes assumes, with the same forward and the ATM vol.
 
 ![density](figures/step3_density.png)
 
@@ -90,28 +115,34 @@ benchmark uses the same forward and the ATM vol.
 | stress | 1M | 78% | -1.9 | 5.9 | 29% / 36% | 18% / 19% |
 | stress | 3M | 63% | -2.1 | 6.1 | 32% / 43% | 24% / 30% |
 
-- On the calm day the skew is the whole crash premium: the lognormal gives a 20% fall no chance.
+- On the calm day the skew is the whole crash premium: the lognormal gives a 20% fall no chance,
+  the market gives it 2.2% over three months.
 - On the stress day the ATM vol alone already prices the crash. The market density is more peaked
   than the lognormal with a fatter far-left tail, and gives moderate falls a lower probability.
 - Stress-day tails rest on the SVI wings, where the fit is weakest.
 
 ## Step 4: local vol and Monte Carlo
 
-Dupire's equation in total variance is sigma_loc^2(k, T) = (dw/dT) / g(k, T), the calendar slope
-over the butterfly term from Step 2. It is evaluated on the surface grid and clipped to [5%, 300%].
-Monte Carlo is log-Euler on k_t = ln(S_t / F_t), so no rates or dividends appear; 200,000 antithetic
-paths, 8 steps per day. At daily steps the Euler bias on the stress day is 0.2 to 0.5 vol points,
-several standard errors. European calls under local vol reproduce the surface within 2 s.e. at
-every strike on both days.
+Dupire (1994) showed that a surface of vanilla prices pins down a unique local volatility
+sigma_loc(index level, time). In total variance the formula is sigma_loc^2(k, T) = (dw/dT) / g(k, T):
+the calendar slope over the butterfly term from Step 2. It is evaluated on the surface grid and
+clipped to [5%, 300%]. Monte Carlo is log-Euler on k_t = ln(S_t / F_t), so no rates or dividends
+appear; 200,000 antithetic paths, 8 steps per day. At daily steps the discretisation bias on the
+stress day is 0.2 to 0.5 vol points, several standard errors.
+
+Validation comes first: European calls priced by simulation under local vol must reproduce the
+surface they were built from. They do, within 2 standard errors at every strike on both days.
 
 ![local vol](figures/step4_localvol.png)
 ![validation](figures/step4_validation.png)
 
-Three-month options struck at the forward, barrier at 90% of spot, daily monitoring and fixings.
-Control variates: the European call for the barrier, the geometric Asian (closed form) for the
-Asian under Black-Scholes. Prices in % of the forward; s.e. at most 0.02 on the stress day and
-0.006 on the calm day. "BS with term structure" uses the ATM vol curve with no skew, to separate
-the two effects.
+Two path-dependent options, three months, struck at the forward. A down-and-out call is a call
+that is cancelled if the index ever closes below a barrier, here 90% of spot. An arithmetic Asian
+call pays on the average daily close rather than the final level. Black-Scholes and local vol agree
+on every vanilla, so any difference here is the path. "BS with term structure" uses the ATM vol
+curve with no skew, to separate the two effects. Control variates: the European call for the
+barrier, the geometric Asian (closed form) for the Asian under Black-Scholes. Prices in % of the
+forward; s.e. at most 0.02 on the stress day and 0.006 on the calm day.
 
 | day | option | Black-Scholes | BS with ATM term structure | local vol |
 |---|---|---|---|---|
@@ -122,10 +153,9 @@ the two effects.
 | stress | down-and-out call | 8.69 | 9.06 | 8.64 |
 | stress | arithmetic Asian | 7.53 | 9.04 | 9.08 |
 
-- All three models agree on the vanilla, so the differences are path-dependence only.
 - The barrier is the skew effect. Local vol is higher below spot, so more paths knock out: 1.2%
   cheaper than Black-Scholes on the calm day, 4.6% cheaper than the term-structure model on the stress day.
-- The Asian is the term-structure effect. Calm-day vol slopes up with maturity, so the average fixes
+- The Asian is the term-structure effect. Calm-day vol rises with maturity, so the average fixes
   under lower early vol (7% cheaper); stress-day vol is inverted (20% dearer). Black-Scholes with the
   right ATM term structure lands within 0.5% of local vol.
 
