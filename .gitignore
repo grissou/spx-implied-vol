@@ -1,0 +1,9 @@
+# WRDS data cannot be redistributed
+data/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.ipynb_checkpoints/
+.DS_Store
