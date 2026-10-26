@@ -286,6 +286,3 @@ where most paths knock out and the vanilla payoff is a weak control.
   between weekly expiries. Vanilla prices are unaffected; smoothing the term structure would clean it.
 - Log-Euler needs 8 steps per day on the stress day. A higher-order scheme would be cheaper.
 - Quotes are end-of-day closes; intraday timing of the index level and option quotes is not aligned.
-
-## What I learned
-
