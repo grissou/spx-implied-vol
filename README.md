@@ -43,6 +43,7 @@ Everything in `figures/` is a diagnostic, named by step.
 ```
 python -m venv ~/venvs/spxvol && ~/venvs/spxvol/bin/pip install -e .
 ~/venvs/spxvol/bin/python scripts/build.py
+~/venvs/spxvol/bin/pip install pytest && ~/venvs/spxvol/bin/pytest   # 34 tests, no data needed
 ```
 
 The first run pulls two days from WRDS through `~/.pgpass` and caches them in `data/`, which is
@@ -277,6 +278,7 @@ where most paths knock out and the vanilla payoff is a weak control.
 | `src/spxvol/localvol.py` | Dupire local vol on the surface grid |
 | `src/spxvol/mc.py` | log-Euler simulation, antithetic pairs, control variates, geometric Asian closed form |
 | `scripts/build.py` | rebuilds `results/` and `figures/` |
+| `tests/` | Black-76 parity, vega and IV round trip; SVI fit, derivatives and g(k); density vs lognormal; Monte Carlo vs Black-Scholes and the geometric Asian closed form |
 
 ## Limitations
 
@@ -286,3 +288,5 @@ where most paths knock out and the vanilla payoff is a weak control.
   between weekly expiries. Vanilla prices are unaffected; smoothing the term structure would clean it.
 - Log-Euler needs 8 steps per day on the stress day. A higher-order scheme would be cheaper.
 - Quotes are end-of-day closes; intraday timing of the index level and option quotes is not aligned.
+
+The code was written with AI coding assistance (Claude Code) under my direction.
