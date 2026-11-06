@@ -26,7 +26,7 @@ def lognormal_density(F, T, sigma, K):
 
 
 def density_stats(K, q, F):
-    """Mass, mean, log-return moments and left-tail probabilities."""
+    """Mass, mean and log-return moments."""
     tr = np.trapezoid
     x = np.log(K / F)
     mass = tr(q, K)
@@ -39,6 +39,4 @@ def density_stats(K, q, F):
         "log_vol": np.sqrt(var),
         "skew": cm(3) / var**1.5,
         "ex_kurt": cm(4) / var**2 - 3,
-        "P(S<0.9F)": tr(q[K < 0.9 * F], K[K < 0.9 * F]),
-        "P(S<0.8F)": tr(q[K < 0.8 * F], K[K < 0.8 * F]),
     }

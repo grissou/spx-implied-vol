@@ -1,4 +1,4 @@
-"""Step 1: filter quotes, forward and discount factor per expiry, own implied vols."""
+"""Step 1: filter quotes, forward and discount factor per expiry, implied vols."""
 
 import numpy as np
 import pandas as pd

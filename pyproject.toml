@@ -1,9 +1,9 @@
 [project]
 name = "spxvol"
 version = "0.1.0"
-description = "SPX implied vol surface and risk-neutral density from OptionMetrics data"
+description = "Implied vol surface and risk-neutral density from a live option chain"
 requires-python = ">=3.11"
-dependencies = ["numpy", "pandas", "scipy", "matplotlib", "pyarrow", "wrds"]
+dependencies = ["numpy", "pandas", "scipy", "matplotlib", "pyarrow", "yfinance"]
 
 
 [build-system]

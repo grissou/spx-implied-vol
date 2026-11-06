@@ -1,1 +1,1 @@
-"""SPX implied volatility surface, risk-neutral density and local-vol Monte Carlo."""
+"""Implied volatility surface and risk-neutral density from an option chain."""
