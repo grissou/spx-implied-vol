@@ -169,17 +169,17 @@ def main(ticker, date):
               f"actual close {S_T:.0f} ({100 * (S_T / spot - 1):+.0f}%); market-implied P({word}) = {100 * prob:.2f}%, lognormal {100 * prob_ln:.2f}%")
 
         ax.plot(K / spot, dens * spot, color="#2a78d6", lw=2, label="implied by option prices")
-        ax.plot(K / spot, logn * spot, color="#eb6834", lw=1.5, ls="--", label=f"lognormal at ATM vol {100 * atm:.0f}%")
+        ax.plot(K / spot, logn * spot, color="#eb6834", lw=1.5, ls="--", label="lognormal at the same at-the-money vol")
         ax.axvline(S_T / spot, color="#0b0b0b", lw=1.2, ls=":")
         ax.text(0.02, 0.97, f"dotted line: actual close {S_T:.0f} ({100 * (S_T / spot - 1):+.0f}%)\nmarket-implied P({word}) = {100 * prob:.2f}%",
                 transform=ax.transAxes, va="top", fontsize=9, color="#0b0b0b")
         ax.set(xlim=(0.5, 1.4), xlabel=f"price at expiry / close on {date}", title=f"expiry {exdate.date()}, {T:.2f} years ahead")
         ax.spines[["top", "right"]].set_visible(False)
-        ax.legend(frameon=False, loc="center right", fontsize=9)
     axes[0].set_ylabel("probability density")
     fig.suptitle(f"{ticker} on {date} (close {spot:.0f}): distribution of the price at expiry implied by option prices, and what happened",
                  x=0.01, ha="left")
-    fig.tight_layout()
+    fig.legend(*axes[0].get_legend_handles_labels(), loc="upper right", ncol=2, frameon=False, fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(f"implied_distribution_{ticker}_{date}.png", dpi=150)
 
 
