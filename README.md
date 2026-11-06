@@ -18,10 +18,6 @@ at the same at-the-money volatility, says about 1 in a million. The whole differ
 the extra the market charges for puts that pay off in a crash. It was pricing a crash as far
 likelier than a textbook model would, and still an order of magnitude too complacent.
 
-These are risk-neutral probabilities, the odds at which the market was willing to trade, not a
-forecast. They include a premium for bad states, so the real-world odds it believed were lower
-still.
-
 ## Method
 
 One script, `implied_distribution.py`. Breeden and Litzenberger (1978): the probability density of
@@ -44,3 +40,33 @@ python implied_distribution.py SPX 2020-02-19
 
 Quotes are cached in `data/`, which is gitignored because OptionMetrics data cannot be
 redistributed. The realised closes come from Yahoo Finance.
+
+## Why smooth first, and what it costs
+
+Differentiating twice amplifies noise. Quotes sit on a coarse strike grid with bid-ask noise of a
+few cents, and second differences of raw prices give a density that is jagged and negative in
+places. Fitting a smooth curve first fixes that, and SVI in particular has known no-arbitrage
+conditions, so the density it implies is positive by construction and extrapolates sensibly past
+the last quoted strike, which matters because the tail is where the question lives.
+
+The cost is that the answer in the tail is partly the model's. SVI is convex in total variance;
+the 1-month smile fits to 1.6 vol points, so near the money the curve is the market, but below
+the lowest liquid strike the density is SVI's extrapolation of the market. The 0.06% is therefore
+a model-smoothed number, and I would quote it to one significant figure. A looser smoother (a
+spline, a kernel) tracks the quotes more closely but has to be forced not to produce negative
+probabilities; a tighter one (a lognormal mixture) is arbitrage-free but harder to read.
+
+## Risk-neutral versus real-world probability
+
+The distribution option prices imply is the risk-neutral one: the probabilities under which
+discounted prices are fair bets. It is the real-world distribution reweighted by how much people
+value a dollar in each state. A dollar in a crash is worth more than a dollar in a boom, because
+that is when you need it, so crash states carry more weight in the risk-neutral measure than
+their real-world frequency.
+
+Two consequences. First, the 0.06% is not what the market "thought" would happen; it is what it
+was willing to pay, which includes insurance value. The probability investors actually assigned
+was lower still. Second, that makes the result stronger, not weaker: even with a crash premium
+built in, the market priced the March outcome at 1 in 1,700. Recovering the real-world
+distribution would need an assumption about risk aversion (a pricing kernel), which is a
+separate project and a separate set of arguments.
