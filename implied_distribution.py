@@ -1,13 +1,15 @@
-"""Implied risk-neutral distribution of the S&P 500 from option prices (OptionMetrics via WRDS).
+"""The probability distribution of a stock's future price implied by its option prices (OptionMetrics via WRDS).
 
-Breeden-Litzenberger: the probability density of the index at expiry is the second derivative of
+Breeden-Litzenberger: the probability density of the price at expiry is the second derivative of
 the call price in strike, q(K) = (1/D) d2C/dK2. Quotes are too coarse and noisy to differentiate
 twice, so a smooth smile (SVI) is fitted to each expiry first and the fitted call prices are
 differentiated instead.
 
-    python implied_distribution.py 2020-02-19      # pulls from WRDS on first use, then uses data/
+    python implied_distribution.py MU 2025-07-01 656     # ticker, date, target price
 
-Requires numpy, pandas, scipy, matplotlib, pyarrow, wrds (credentials in ~/.pgpass).
+prints, for each expiry, the probability the market gave to the price finishing above the target.
+Pulls from WRDS on first use (credentials in ~/.pgpass), then reads data/. Requires numpy, pandas,
+scipy, matplotlib, pyarrow, wrds.
 """
 
 import sys
@@ -19,22 +21,25 @@ import pandas as pd
 from scipy.optimize import brentq, least_squares
 from scipy.stats import norm
 
-SECID = 108105  # SPX in OptionMetrics
 DATA = Path(__file__).parent / "data"
+SECIDS = {"SPX": 108105}  # OptionMetrics ids; other tickers are looked up
 
 
 # ---------------------------------------------------------------- data
-def load(date):
-    """One day of SPX option quotes, index close and zero curve."""
-    cache = DATA / date
+def load(ticker, date):
+    """One day of option quotes, the close and the zero curve."""
+    cache = DATA / f"{ticker}_{date}"
     if not (cache / "options.parquet").exists():
         import wrds
 
         db = wrds.Connection()
+        secid = SECIDS.get(ticker) or int(db.raw_sql(
+            f"select secid from optionm.opprcd{date[:4]} where date = '{date}' and secid in "
+            f"(select secid from optionm.securd where ticker = '{ticker}') group by secid order by count(*) desc limit 1").secid[0])
         sql = {
             "options": f"select date, exdate, cp_flag, strike_price, best_bid, best_offer, am_settlement "
-                       f"from optionm.opprcd{date[:4]} where secid = {SECID} and date = '{date}'",
-            "spot": f"select date, close from optionm.secprd where secid = {SECID} and date = '{date}'",
+                       f"from optionm.opprcd{date[:4]} where secid = {secid} and date = '{date}'",
+            "spot": f"select date, close from optionm.secprd where secid = {secid} and date = '{date}'",
             "zero_curve": f"select date, days, rate from optionm.zerocd where date = '{date}' order by days",
         }
         cache.mkdir(parents=True, exist_ok=True)
@@ -49,11 +54,11 @@ def load(date):
 
 
 def clean(o):
-    """Live quotes only, 7 days to 2 years out, PM-settled contract where AM and PM share a date."""
+    """Live quotes only, 7 days to 3 years out, PM-settled contract where AM and PM share a date."""
     o = o.rename(columns={"best_bid": "bid", "best_offer": "ask", "cp_flag": "cp"})
     o["mid"] = (o.bid + o.ask) / 2
     o["days"] = (o.exdate - o.date).dt.days
-    o = o[(o.bid > 0) & (o.ask > o.bid) & ((o.ask - o.bid) / o.mid <= 0.5) & (o.days >= 7) & (o.days <= 730)]
+    o = o[(o.bid > 0) & (o.ask > o.bid) & ((o.ask - o.bid) / o.mid <= 0.5) & (o.days >= 7) & (o.days <= 1100)]
     has_pm = o[o.am_settlement == 0].exdate.unique()
     o = o[(o.am_settlement == 0) | ~o.exdate.isin(has_pm)]
     o["T"] = (o.days - 6.5 / 24 * o.am_settlement) / 365  # AM contracts expire at the open
@@ -116,12 +121,14 @@ def density(p, F, T, D):
     return K, np.gradient(np.gradient(C, K), K) / D
 
 
-def main(date):
-    o, spot, zc = load(date)
+def main(ticker, date, target):
+    o, spot, zc = load(ticker, date)
     q = clean(o)
+    print(f"{ticker} on {date}: close {spot:.2f}, target {target:.2f} ({target / spot:.2f}x)")
+    expiries = sorted(q["T"].unique())
+    picks = [expiries[-1]] + [expiries[(np.abs(np.array(expiries) - t)).argmin()] for t in (expiries[-1] / 2, expiries[-1] / 4)]
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
-    for ax, days in zip(axes, (30, 91, 182)):
-        T = q["T"].iloc[(q["T"] * 365 - days).abs().argmin()]
+    for ax, T in zip(axes, sorted(set(picks))):
         g = q[q["T"] == T].copy()
         D = float(np.exp(-np.interp(T * 365, zc.days, zc.rate) / 100 * T))
         F = forward(g, D)
@@ -144,20 +151,25 @@ def main(date):
         var = np.trapezoid((x - mean) ** 2 * dens, K)
         skew = np.trapezoid((x - mean) ** 3 * dens, K) / var**1.5
         kurt = np.trapezoid((x - mean) ** 4 * dens, K) / var**2 - 3
-        print(f"{g.exdate.iloc[0].date()}  T={T:.3f}  F={F:.1f}  ATM vol {100 * atm:.1f}%  fit RMSE "
-              f"{100 * np.sqrt(np.mean((np.sqrt(svi(g.k, p) / T) - g.iv) ** 2)):.2f} vol pts  "
-              f"mass {np.trapezoid(dens, K):.3f}  mean/F {np.trapezoid(K * dens, K) / F:.4f}  skew {skew:.2f}  excess kurtosis {kurt:.1f}")
+        above = np.trapezoid(dens[K > target], K[K > target])
+        above_ln = np.trapezoid(logn[K > target], K[K > target])
+        print(f"{g.exdate.iloc[0].date()}  T={T:.2f}  F={F:.1f}  ATM vol {100 * atm:.0f}%  fit RMSE "
+              f"{100 * np.sqrt(np.mean((np.sqrt(svi(g.k, p) / T) - g.iv) ** 2)):.2f} vol pts  mass {np.trapezoid(dens, K):.3f}  "
+              f"skew {skew:.2f}  kurtosis {kurt:.1f}  P(price > {target:.0f}) = {100 * above:.2f}% (lognormal {100 * above_ln:.2f}%)")
 
-        ax.plot(K / F, dens * F, color="#2a78d6", lw=2, label="implied by option prices")
-        ax.plot(K / F, logn * F, color="#eb6834", lw=1.5, ls="--", label=f"lognormal at ATM vol {100 * atm:.0f}%")
-        ax.set(xlim=(0.6, 1.3), xlabel="index at expiry / forward", title=f"expiry {g.exdate.iloc[0].date()}, T = {T:.2f} years")
+        ax.plot(K / spot, dens * spot, color="#2a78d6", lw=2, label="implied by option prices")
+        ax.plot(K / spot, logn * spot, color="#eb6834", lw=1.5, ls="--", label=f"lognormal at ATM vol {100 * atm:.0f}%")
+        ax.axvline(target / spot, color="#52514e", lw=1, ls=":")
+        ax.text(target / spot, ax.get_ylim()[1] * 0.95, f" P(above {target:.0f}) = {100 * above:.1f}%", va="top", fontsize=9, color="#52514e")
+        ax.set(xlim=(0, max(1.5, 1.1 * target / spot)), xlabel=f"price at expiry / price on {date}",
+               title=f"expiry {g.exdate.iloc[0].date()}, {T:.2f} years ahead")
         ax.spines[["top", "right"]].set_visible(False)
-        ax.legend(frameon=False)
+        ax.legend(frameon=False, loc="center right")
     axes[0].set_ylabel("probability density")
-    fig.suptitle(f"S&P 500 on {date}: distribution of the index at expiry implied by option prices", x=0.01, ha="left")
+    fig.suptitle(f"{ticker} on {date} (close {spot:.0f}): distribution of the price at expiry implied by option prices", x=0.01, ha="left")
     fig.tight_layout()
-    fig.savefig(f"implied_distribution_{date}.png", dpi=150)
+    fig.savefig(f"implied_distribution_{ticker}_{date}.png", dpi=150)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "2020-02-19")
+    main(sys.argv[1], sys.argv[2], float(sys.argv[3]))
