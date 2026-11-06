@@ -5,11 +5,13 @@ the call price in strike, q(K) = (1/D) d2C/dK2. Quotes are too coarse and noisy 
 twice, so a smooth smile (SVI) is fitted to each expiry first and the fitted call prices are
 differentiated instead.
 
-    python implied_distribution.py MU 2025-07-01 656     # ticker, date, target price
+    python implied_distribution.py SPX 2020-02-19
 
-prints, for each expiry, the probability the market gave to the price finishing above the target.
-Pulls from WRDS on first use (credentials in ~/.pgpass), then reads data/. Requires numpy, pandas,
-scipy, matplotlib, pyarrow, wrds.
+For the expiries nearest 1, 3 and 6 months it draws the implied distribution, marks where the
+price actually closed on each expiry date, and prints the probability the market had priced for
+ending there or beyond. Option quotes come from WRDS on first use (credentials in ~/.pgpass), then
+from data/; the realised closes come from Yahoo. Requires numpy, pandas, scipy, matplotlib,
+pyarrow, wrds, yfinance.
 """
 
 import sys
@@ -23,6 +25,7 @@ from scipy.stats import norm
 
 DATA = Path(__file__).parent / "data"
 SECIDS = {"SPX": 108105}  # OptionMetrics ids; other tickers are looked up
+YAHOO = {"SPX": "^GSPC"}  # Yahoo symbols where they differ
 
 
 # ---------------------------------------------------------------- data
@@ -63,6 +66,15 @@ def clean(o):
     o = o[(o.am_settlement == 0) | ~o.exdate.isin(has_pm)]
     o["T"] = (o.days - 6.5 / 24 * o.am_settlement) / 365  # AM contracts expire at the open
     return o
+
+
+def realised_close(ticker, exdates):
+    """Actual close on (or just before) each expiry date, from Yahoo."""
+    import yfinance as yf
+
+    h = yf.Ticker(YAHOO.get(ticker, ticker)).history(start=min(exdates) - pd.Timedelta(days=7), end=max(exdates) + pd.Timedelta(days=3))["Close"]
+    h.index = h.index.tz_localize(None).normalize()
+    return {d: float(h[h.index <= d].iloc[-1]) for d in exdates}
 
 
 # ---------------------------------------------------------------- pricing
@@ -121,15 +133,16 @@ def density(p, F, T, D):
     return K, np.gradient(np.gradient(C, K), K) / D
 
 
-def main(ticker, date, target):
+def main(ticker, date):
     o, spot, zc = load(ticker, date)
     q = clean(o)
-    print(f"{ticker} on {date}: close {spot:.2f}, target {target:.2f} ({target / spot:.2f}x)")
-    expiries = sorted(q["T"].unique())
-    picks = [expiries[-1]] + [expiries[(np.abs(np.array(expiries) - t)).argmin()] for t in (expiries[-1] / 2, expiries[-1] / 4)]
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
-    for ax, T in zip(axes, sorted(set(picks))):
+    picks = [q["T"].iloc[(q["T"] * 365 - d).abs().argmin()] for d in (30, 91, 182)]
+    actual = realised_close(ticker, [q[q["T"] == T].exdate.iloc[0] for T in picks])
+    print(f"{ticker} on {date}: close {spot:.2f}")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4))
+    for ax, T in zip(axes, picks):
         g = q[q["T"] == T].copy()
+        exdate = g.exdate.iloc[0]
         D = float(np.exp(-np.interp(T * 365, zc.days, zc.rate) / 100 * T))
         F = forward(g, D)
         g = g[((g.cp == "P") & (g.strike < F)) | ((g.cp == "C") & (g.strike > F))]  # out of the money
@@ -146,30 +159,29 @@ def main(ticker, date, target):
         d2 = (np.log(F / K) - 0.5 * atm**2 * T) / (atm * np.sqrt(T))
         logn = norm.pdf(d2) / (K * atm * np.sqrt(T))
 
-        x = np.log(K / F)
-        mean = np.trapezoid(x * dens, K)
-        var = np.trapezoid((x - mean) ** 2 * dens, K)
-        skew = np.trapezoid((x - mean) ** 3 * dens, K) / var**1.5
-        kurt = np.trapezoid((x - mean) ** 4 * dens, K) / var**2 - 3
-        above = np.trapezoid(dens[K > target], K[K > target])
-        above_ln = np.trapezoid(logn[K > target], K[K > target])
-        print(f"{g.exdate.iloc[0].date()}  T={T:.2f}  F={F:.1f}  ATM vol {100 * atm:.0f}%  fit RMSE "
-              f"{100 * np.sqrt(np.mean((np.sqrt(svi(g.k, p) / T) - g.iv) ** 2)):.2f} vol pts  mass {np.trapezoid(dens, K):.3f}  "
-              f"skew {skew:.2f}  kurtosis {kurt:.1f}  P(price > {target:.0f}) = {100 * above:.2f}% (lognormal {100 * above_ln:.2f}%)")
+        S_T = actual[exdate]
+        fell = S_T < spot
+        side = K <= S_T if fell else K >= S_T
+        prob, prob_ln = np.trapezoid(dens[side], K[side]), np.trapezoid(logn[side], K[side])
+        word = "below" if fell else "above"
+        print(f"  expiry {exdate.date()} ({T:.2f}y): ATM vol {100 * atm:.0f}%, fit RMSE "
+              f"{100 * np.sqrt(np.mean((np.sqrt(svi(g.k, p) / T) - g.iv) ** 2)):.2f} vol pts, mass {np.trapezoid(dens, K):.3f}; "
+              f"actual close {S_T:.0f} ({100 * (S_T / spot - 1):+.0f}%); market-implied P({word}) = {100 * prob:.2f}%, lognormal {100 * prob_ln:.2f}%")
 
         ax.plot(K / spot, dens * spot, color="#2a78d6", lw=2, label="implied by option prices")
         ax.plot(K / spot, logn * spot, color="#eb6834", lw=1.5, ls="--", label=f"lognormal at ATM vol {100 * atm:.0f}%")
-        ax.axvline(target / spot, color="#52514e", lw=1, ls=":")
-        ax.text(target / spot, ax.get_ylim()[1] * 0.95, f" P(above {target:.0f}) = {100 * above:.1f}%", va="top", fontsize=9, color="#52514e")
-        ax.set(xlim=(0, max(1.5, 1.1 * target / spot)), xlabel=f"price at expiry / price on {date}",
-               title=f"expiry {g.exdate.iloc[0].date()}, {T:.2f} years ahead")
+        ax.axvline(S_T / spot, color="#0b0b0b", lw=1.2, ls=":")
+        ax.text(S_T / spot, ax.get_ylim()[1] * 0.97, f" actual close {S_T:.0f} ({100 * (S_T / spot - 1):+.0f}%)\n implied P({word}) = {100 * prob:.2f}%",
+                va="top", ha="left" if fell else "right", fontsize=9, color="#0b0b0b")
+        ax.set(xlim=(0.5, 1.4), xlabel=f"price at expiry / close on {date}", title=f"expiry {exdate.date()}, {T:.2f} years ahead")
         ax.spines[["top", "right"]].set_visible(False)
         ax.legend(frameon=False, loc="upper left")
     axes[0].set_ylabel("probability density")
-    fig.suptitle(f"{ticker} on {date} (close {spot:.0f}): distribution of the price at expiry implied by option prices", x=0.01, ha="left")
+    fig.suptitle(f"{ticker} on {date} (close {spot:.0f}): distribution of the price at expiry implied by option prices, and what happened",
+                 x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(f"implied_distribution_{ticker}_{date}.png", dpi=150)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], float(sys.argv[3]))
+    main(sys.argv[1], sys.argv[2])
