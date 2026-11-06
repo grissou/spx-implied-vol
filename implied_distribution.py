@@ -164,7 +164,7 @@ def main(ticker, date, target):
         ax.set(xlim=(0, max(1.5, 1.1 * target / spot)), xlabel=f"price at expiry / price on {date}",
                title=f"expiry {g.exdate.iloc[0].date()}, {T:.2f} years ahead")
         ax.spines[["top", "right"]].set_visible(False)
-        ax.legend(frameon=False, loc="center right")
+        ax.legend(frameon=False, loc="upper left")
     axes[0].set_ylabel("probability density")
     fig.suptitle(f"{ticker} on {date} (close {spot:.0f}): distribution of the price at expiry implied by option prices", x=0.01, ha="left")
     fig.tight_layout()
