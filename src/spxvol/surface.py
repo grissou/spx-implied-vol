@@ -1,4 +1,4 @@
-"""Step 2: SVI per expiry on the core strike range, arbitrage checks, total-variance surface."""
+"""Step 2: SVI per expiry on the core strike range, butterfly and calendar checks."""
 
 import numpy as np
 import pandas as pd
@@ -34,27 +34,3 @@ def calendar_violations(slices: pd.DataFrame, k=np.linspace(*K_CORE, 181)) -> pd
         if dw.min() < 0:
             rows.append(dict(T1=slices["T"].iloc[i], T2=slices["T"].iloc[i + 1], k=k[dw.argmin()], dw=dw.min()))
     return pd.DataFrame(rows, columns=["T1", "T2", "k", "dw"])
-
-
-class Surface:
-    """w(k, T): linear in T between expiries, running max in T, proportional to T before the first."""
-
-    def __init__(self, slices: pd.DataFrame, k=np.linspace(*K_CORE, 181)):
-        self.k = k
-        self.T = slices["T"].values
-        W = np.array([svi_w(k, p) for p in slices[PARAMS].values])
-        self.W = np.maximum.accumulate(W, axis=0)
-        self.adjusted = float(np.abs(self.W - W).max())
-
-    def w(self, k, T):
-        """Vector k, scalar T."""
-        if T <= self.T[0]:
-            row = self.W[0] * T / self.T[0]
-        else:
-            i = min(np.searchsorted(self.T, T, side="right") - 1, len(self.T) - 2)
-            a = (T - self.T[i]) / (self.T[i + 1] - self.T[i])
-            row = (1 - a) * self.W[i] + a * self.W[i + 1]
-        return np.interp(k, self.k, row)
-
-    def iv(self, k, T):
-        return np.sqrt(self.w(k, T) / T)
