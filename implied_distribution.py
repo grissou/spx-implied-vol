@@ -175,7 +175,7 @@ def main(ticker, date):
                 transform=ax.transAxes, va="top", fontsize=9, color="#0b0b0b")
         ax.set(xlim=(0.5, 1.4), xlabel=f"price at expiry / close on {date}", title=f"expiry {exdate.date()}, {T:.2f} years ahead")
         ax.spines[["top", "right"]].set_visible(False)
-        ax.legend(frameon=False, loc="upper right", fontsize=9)
+        ax.legend(frameon=False, loc="center right", fontsize=9)
     axes[0].set_ylabel("probability density")
     fig.suptitle(f"{ticker} on {date} (close {spot:.0f}): distribution of the price at expiry implied by option prices, and what happened",
                  x=0.01, ha="left")
